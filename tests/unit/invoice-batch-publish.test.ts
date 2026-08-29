@@ -116,7 +116,7 @@ describe("InvoiceService.publishInvoicesBatch", () => {
       stubInvoices([draftInvoice("a")]);
 
       await expect(
-        service.publishInvoicesBatch({ invoiceIds: ["a"], sellerId: SELLER_ID }),
+        service.publishInvoicesBatch({ invoiceIds: ["a"], sellerId: SELLER_ID })
       ).resolves.toMatchObject({ count: 1 });
     });
   });
@@ -134,7 +134,7 @@ describe("InvoiceService.publishInvoicesBatch", () => {
       ]);
 
       await expect(
-        service.publishInvoicesBatch({ invoiceIds: ["a", "b", "c"], sellerId: SELLER_ID }),
+        service.publishInvoicesBatch({ invoiceIds: ["a", "b", "c"], sellerId: SELLER_ID })
       ).rejects.toBeInstanceOf(ServiceError);
 
       expect(dataSource.transaction).not.toHaveBeenCalled();
@@ -146,7 +146,7 @@ describe("InvoiceService.publishInvoicesBatch", () => {
       stubInvoices([good, draftInvoice("b", { ipfsHash: null })]);
 
       await expect(
-        service.publishInvoicesBatch({ invoiceIds: ["a", "b"], sellerId: SELLER_ID }),
+        service.publishInvoicesBatch({ invoiceIds: ["a", "b"], sellerId: SELLER_ID })
       ).rejects.toBeInstanceOf(ServiceError);
 
       expect(good.status).toBe(InvoiceStatus.DRAFT);
@@ -161,7 +161,7 @@ describe("InvoiceService.publishInvoicesBatch", () => {
         });
 
       await expect(
-        service.publishInvoicesBatch({ invoiceIds: ["a", "b"], sellerId: SELLER_ID }),
+        service.publishInvoicesBatch({ invoiceIds: ["a", "b"], sellerId: SELLER_ID })
       ).rejects.toThrow("deadlock detected");
 
       expect(transactionCommitted).toBe(false);
@@ -185,8 +185,9 @@ describe("InvoiceService.publishInvoicesBatch", () => {
       expect(error.code).toBe("batch_publish_rejected");
       expect(error.statusCode).toBe(400);
 
-      const rejections = (error.details as { rejections: Array<{ invoiceId: string; code: string }> })
-        .rejections;
+      const rejections = (
+        error.details as { rejections: Array<{ invoiceId: string; code: string }> }
+      ).rejections;
       expect(rejections.map((r) => r.invoiceId).sort()).toEqual(["b", "c", "d"]);
       expect(rejections.find((r) => r.invoiceId === "b")?.code).toBe("invalid_status_transition");
       expect(rejections.find((r) => r.invoiceId === "c")?.code).toBe("invoice_not_publishable");
@@ -200,8 +201,9 @@ describe("InvoiceService.publishInvoicesBatch", () => {
         .publishInvoicesBatch({ invoiceIds: ["a", "missing"], sellerId: SELLER_ID })
         .catch((e) => e)) as ServiceError;
 
-      const rejections = (error.details as { rejections: Array<{ invoiceId: string; code: string }> })
-        .rejections;
+      const rejections = (
+        error.details as { rejections: Array<{ invoiceId: string; code: string }> }
+      ).rejections;
       expect(rejections).toEqual([
         { invoiceId: "missing", code: "invoice_not_found", message: "Invoice not found" },
       ]);
@@ -239,17 +241,19 @@ describe("InvoiceService.publishInvoicesBatch", () => {
   describe("preconditions", () => {
     it("rejects an empty batch", async () => {
       await expect(
-        service.publishInvoicesBatch({ invoiceIds: [], sellerId: SELLER_ID }),
+        service.publishInvoicesBatch({ invoiceIds: [], sellerId: SELLER_ID })
       ).rejects.toMatchObject({ code: "empty_batch", statusCode: 400 });
     });
 
     it("rejects the whole batch when the seller is not KYC approved", async () => {
       stubInvoices([
-        draftInvoice("a", { seller: { ...approvedSeller(), kycStatus: KYCStatus.PENDING } as never }),
+        draftInvoice("a", {
+          seller: { ...approvedSeller(), kycStatus: KYCStatus.PENDING } as never,
+        }),
       ]);
 
       await expect(
-        service.publishInvoicesBatch({ invoiceIds: ["a"], sellerId: SELLER_ID }),
+        service.publishInvoicesBatch({ invoiceIds: ["a"], sellerId: SELLER_ID })
       ).rejects.toMatchObject({ code: "kyc_approval_required", statusCode: 403 });
 
       expect(dataSource.transaction).not.toHaveBeenCalled();
@@ -263,7 +267,7 @@ describe("InvoiceService.publishInvoicesBatch", () => {
       stubInvoices([draftInvoice("a")]);
 
       await expect(
-        noDbService.publishInvoicesBatch({ invoiceIds: ["a"], sellerId: SELLER_ID }),
+        noDbService.publishInvoicesBatch({ invoiceIds: ["a"], sellerId: SELLER_ID })
       ).rejects.toMatchObject({ code: "batch_publish_unavailable", statusCode: 503 });
     });
   });

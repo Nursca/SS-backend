@@ -17,14 +17,17 @@ function createFakeDataSource(invoice: Invoice) {
   const investments = new Map<string, Investment>();
 
   type FakeManager = {
-    createQueryBuilder: (entity: unknown, alias: string) => {
+    createQueryBuilder: (
+      entity: unknown,
+      alias: string
+    ) => {
       setLock: () => unknown;
       where: (clause: string, params: { id: string }) => unknown;
       getOne: () => Promise<Invoice | null>;
     };
     find: (
       entity: unknown,
-      options: { where: Record<string, unknown> | Record<string, unknown>[] },
+      options: { where: Record<string, unknown> | Record<string, unknown>[] }
     ) => Promise<Investment[]>;
     create: (entity: unknown, data: Partial<Investment>) => Investment | Partial<Investment>;
     save: (entity: unknown, data: Investment | Invoice) => Promise<Investment | Invoice>;
@@ -39,22 +42,22 @@ function createFakeDataSource(invoice: Invoice) {
           targetId = params.id;
           return builder;
         },
-        getOne: async () => (targetId ? invoices.get(targetId) ?? null : null),
+        getOne: async () => (targetId ? (invoices.get(targetId) ?? null) : null),
       };
       return builder;
     },
     find: async (
       entity: unknown,
-      options: { where: Record<string, unknown> | Record<string, unknown>[] },
+      options: { where: Record<string, unknown> | Record<string, unknown>[] }
     ) => {
       if (entity === Investment) {
         const whereClauses = Array.isArray(options.where) ? options.where : [options.where];
         return [...investments.values()].filter((investment) =>
           whereClauses.some((clause) =>
             Object.entries(clause).every(
-              ([key, value]) => (investment as unknown as Record<string, unknown>)[key] === value,
-            ),
-          ),
+              ([key, value]) => (investment as unknown as Record<string, unknown>)[key] === value
+            )
+          )
         );
       }
       return [];
@@ -76,8 +79,7 @@ function createFakeDataSource(invoice: Invoice) {
   };
 
   const dataSource = {
-    transaction: async (callback: (manager: FakeManager) => Promise<unknown>) =>
-      callback(manager),
+    transaction: async (callback: (manager: FakeManager) => Promise<unknown>) => callback(manager),
   } as unknown as DataSource;
 
   return { dataSource, invoices, investments };
@@ -119,7 +121,7 @@ describe("Settlement integration: rejecting settlement of non-fully-funded invoi
         invoiceId: invoice.id,
         proceeds: "6000.0000",
         actorWallet: "GADMIN",
-      }),
+      })
     ).rejects.toThrow(/Cannot settle an invoice with status published/);
   });
 
@@ -152,7 +154,7 @@ describe("Settlement integration: rejecting settlement of non-fully-funded invoi
         invoiceId: invoice.id,
         proceeds: "6000.0000",
         actorWallet: "GADMIN",
-      }),
+      })
     ).rejects.toThrow(/Cannot settle an invoice with status published/);
   });
 
@@ -246,7 +248,7 @@ describe("Settlement integration: funding multiple investors then settling", () 
     });
 
     const returnByInvestor = new Map(
-      result.settlements.map((settlement) => [settlement.investorId, settlement.actualReturn]),
+      result.settlements.map((settlement) => [settlement.investorId, settlement.actualReturn])
     );
 
     expect(returnByInvestor.get(investorAId)).toBe("4400.0000");
@@ -257,7 +259,7 @@ describe("Settlement integration: funding multiple investors then settling", () 
 
     const sumOfReturns = result.settlements.reduce(
       (sum, settlement) => sum + Number(settlement.actualReturn),
-      0,
+      0
     );
     expect(sumOfReturns).toBeCloseTo(6600, 4);
   });
@@ -300,7 +302,7 @@ describe("Settlement integration: funding multiple investors then settling", () 
     });
 
     const completionCall = infoSpy.mock.calls.find(
-      ([message]) => message === "Settlement flow completed.",
+      ([message]) => message === "Settlement flow completed."
     );
     expect(completionCall).toBeDefined();
 
@@ -325,11 +327,11 @@ describe("Settlement integration: funding multiple investors then settling", () 
         invoiceId: invoice.id,
         proceeds: "6600.0000",
         actorWallet: "GADMINWALLET1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-      }),
+      })
     ).rejects.toThrow();
 
     const completionCall = infoSpy.mock.calls.find(
-      ([message]) => message === "Settlement flow completed.",
+      ([message]) => message === "Settlement flow completed."
     );
     expect(completionCall).toBeUndefined();
   });

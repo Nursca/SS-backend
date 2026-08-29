@@ -36,7 +36,7 @@ export interface NotificationSink {
     userId: string,
     type: NotificationType,
     title: string,
-    message: string,
+    message: string
   ): Promise<unknown>;
 }
 
@@ -148,7 +148,11 @@ export interface GetInvoicesOptions {
  */
 const VALID_TRANSITIONS: Record<InvoiceStatus, InvoiceStatus[]> = {
   [InvoiceStatus.DRAFT]: [InvoiceStatus.PENDING, InvoiceStatus.PUBLISHED, InvoiceStatus.CANCELLED],
-  [InvoiceStatus.PENDING]: [InvoiceStatus.PUBLISHED, InvoiceStatus.CANCELLED, InvoiceStatus.REJECTED],
+  [InvoiceStatus.PENDING]: [
+    InvoiceStatus.PUBLISHED,
+    InvoiceStatus.CANCELLED,
+    InvoiceStatus.REJECTED,
+  ],
   [InvoiceStatus.PUBLISHED]: [InvoiceStatus.FUNDED, InvoiceStatus.CANCELLED],
   [InvoiceStatus.FUNDED]: [InvoiceStatus.SETTLED, InvoiceStatus.CANCELLED],
   [InvoiceStatus.SETTLED]: [],
@@ -185,7 +189,13 @@ export class InvoiceService {
     try {
       const amt = new Decimal(amount);
       const disc = new Decimal(discountRate);
-      if (!amt.isFinite() || !disc.isFinite() || amt.isNegative() || disc.isNegative() || disc.gt(100)) {
+      if (
+        !amt.isFinite() ||
+        !disc.isFinite() ||
+        amt.isNegative() ||
+        disc.isNegative() ||
+        disc.gt(100)
+      ) {
         throw new ServiceError("invalid_amount", "Invalid amount or discount rate", 400);
       }
       const netAmount = amt.minus(amt.times(disc.dividedBy(100)));
@@ -462,7 +472,7 @@ export class InvoiceService {
       throw new ServiceError(
         "invoice_not_publishable",
         `Invoice failed pre-publish validation: ${validationErrors.map((e) => e.message).join(" ")}`,
-        400,
+        400
       );
     }
 
@@ -495,7 +505,7 @@ export class InvoiceService {
    * on each retry.
    */
   async publishInvoicesBatch(
-    input: BatchPublishInvoicesInput,
+    input: BatchPublishInvoicesInput
   ): Promise<BatchPublishInvoicesResult> {
     const { invoiceIds, sellerId } = input;
 
@@ -509,7 +519,7 @@ export class InvoiceService {
       throw new ServiceError(
         "batch_publish_unavailable",
         "Batch publishing requires a database connection",
-        503,
+        503
       );
     }
 
@@ -529,11 +539,15 @@ export class InvoiceService {
             where: { id: invoiceId },
             relations: ["seller"],
           }),
-        })),
+        }))
       );
     } catch (error) {
       logger.error("Failed to fetch batch invoices", { error, sellerId });
-      throw new ServiceError("batch_fetch_failed", "Failed to fetch invoices for batch publish", 500);
+      throw new ServiceError(
+        "batch_fetch_failed",
+        "Failed to fetch invoices for batch publish",
+        500
+      );
     }
 
     for (const { invoiceId, invoice } of fetched) {
@@ -560,7 +574,7 @@ export class InvoiceService {
         throw new ServiceError(
           "kyc_approval_required",
           "KYC approval is required to publish invoices",
-          403,
+          403
         );
       }
 
@@ -591,7 +605,7 @@ export class InvoiceService {
         "batch_publish_rejected",
         `${rejections.length} of ${uniqueIds.length} invoices cannot be published; no invoices were changed`,
         400,
-        { rejections },
+        { rejections }
       );
     }
 
@@ -710,11 +724,7 @@ export class InvoiceService {
     }
 
     if (!this.dataSource) {
-      throw new ServiceError(
-        "internal_error",
-        "Database connection unavailable",
-        500
-      );
+      throw new ServiceError("internal_error", "Database connection unavailable", 500);
     }
 
     const investmentRepository = this.dataSource.getRepository(Investment);

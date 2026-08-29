@@ -24,25 +24,23 @@ export interface WebhookDispatchResult {
 export class WebhookDispatcherService {
   constructor(
     private readonly dataSource: DataSource,
-    private readonly appLogger: AppLogger = logger,
+    private readonly appLogger: AppLogger = logger
   ) {}
 
   async dispatchWebhookEvent(
     eventType: string,
     payload: unknown,
-    eventId?: string,
+    eventId?: string
   ): Promise<WebhookDispatchResult[]> {
     const subscriptions = await this.dataSource
       .getRepository(WebhookSubscription)
       .find({ where: { active: true } });
     const body = JSON.stringify({ eventType, payload });
     const eligible = subscriptions.filter((subscription) =>
-      subscription.eventTypes.includes(eventType),
+      subscription.eventTypes.includes(eventType)
     );
     return Promise.all(
-      eligible.map((subscription) =>
-        this.deliver(subscription, eventType, body, eventId),
-      ),
+      eligible.map((subscription) => this.deliver(subscription, eventType, body, eventId))
     );
   }
 
@@ -50,7 +48,7 @@ export class WebhookDispatcherService {
     subscription: WebhookSubscription,
     eventType: string,
     body: string,
-    eventId?: string,
+    eventId?: string
   ): Promise<WebhookDispatchResult> {
     // Idempotency: a duplicate event (same subscription + eventId) that has
     // already been delivered successfully must not be re-delivered, otherwise
@@ -97,7 +95,7 @@ export class WebhookDispatcherService {
           attempt,
           response.status,
           delivered,
-          delivered ? null : `HTTP ${response.status}`,
+          delivered ? null : `HTTP ${response.status}`
         );
         if (delivered) {
           return {
@@ -118,7 +116,7 @@ export class WebhookDispatcherService {
           attempt,
           lastStatus,
           false,
-          lastError,
+          lastError
         );
       }
       if (attempt < 3) {
@@ -141,10 +139,7 @@ export class WebhookDispatcherService {
     };
   }
 
-  private async alreadyDelivered(
-    subscriptionId: string,
-    eventId: string,
-  ): Promise<boolean> {
+  private async alreadyDelivered(subscriptionId: string, eventId: string): Promise<boolean> {
     const existing = await this.dataSource
       .getRepository(WebhookDeliveryLog)
       .findOne({ where: { subscriptionId, eventId, delivered: true } });
@@ -158,7 +153,7 @@ export class WebhookDispatcherService {
     attempt: number,
     responseStatus: number | null,
     delivered: boolean,
-    errorMessage: string | null,
+    errorMessage: string | null
   ): Promise<void> {
     await this.dataSource.getRepository(WebhookDeliveryLog).save({
       subscriptionId,
@@ -182,7 +177,7 @@ export class WebhookDispatcherService {
 
 export function createWebhookDispatcherService(
   dataSource: DataSource,
-  appLogger?: AppLogger,
+  appLogger?: AppLogger
 ): WebhookDispatcherService {
   return new WebhookDispatcherService(dataSource, appLogger);
 }

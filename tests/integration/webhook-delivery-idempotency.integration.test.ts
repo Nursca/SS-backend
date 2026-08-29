@@ -109,7 +109,7 @@ describe("Webhook delivery idempotency (issue #224)", () => {
         email: "idempotency@test.com",
         userType: "seller",
         kycStatus: "approved",
-      } as any),
+      } as any)
     )) as unknown as User;
 
     const subscriptionRepository = dataSource.getRepository(WebhookSubscription);
@@ -120,7 +120,7 @@ describe("Webhook delivery idempotency (issue #224)", () => {
         secret: "whsec_subscription_secret",
         eventTypes: [EVENT_TYPE],
         active: true,
-      } as any),
+      } as any)
     )) as unknown as WebhookSubscription;
   }, 30000);
 
@@ -174,7 +174,7 @@ describe("Webhook delivery idempotency (issue #224)", () => {
           "x-event-id": EVENT_ID,
           "x-signature": expect.any(String),
         }),
-      }),
+      })
     );
 
     // A delivered delivery record is persisted for this event + subscription.
@@ -213,7 +213,7 @@ describe("Webhook delivery idempotency (issue #224)", () => {
 
     // The duplicate is identified as already handled in the delivery log lines.
     const alreadyHandled = loggerEntries.find(
-      (entry) => entry.level === "info" && entry.message === "webhook.event.already_handled",
+      (entry) => entry.level === "info" && entry.message === "webhook.event.already_handled"
     );
     expect(alreadyHandled).toBeDefined();
     expect(alreadyHandled?.metadata).toMatchObject({
@@ -248,7 +248,7 @@ describe("Webhook delivery idempotency (issue #224)", () => {
     // A failed delivery is NOT marked as already handled, so a later attempt
     // with the same event id is retried normally.
     const alreadyHandled = loggerEntries.find(
-      (entry) => entry.message === "webhook.event.already_handled",
+      (entry) => entry.message === "webhook.event.already_handled"
     );
     expect(alreadyHandled).toBeUndefined();
   });

@@ -190,7 +190,7 @@ export function buildPausedLedgerKey(contractId: string): string {
       contract: new Address(contractId).toScAddress(),
       key: xdr.ScVal.scvSymbol(PAUSED_STORAGE_KEY),
       durability: xdr.ContractDataDurability.persistent(),
-    }),
+    })
   );
   return key.toXDR("base64");
 }
@@ -209,7 +209,7 @@ export function decodePausedEntry(entryXdr: string): boolean {
 }
 
 export function createContractGuardService(
-  dependencies: ContractGuardServiceDependencies,
+  dependencies: ContractGuardServiceDependencies
 ): ContractGuardService {
   return new ContractGuardService(dependencies);
 }

@@ -109,7 +109,7 @@ export function createApp({
     cors({
       origin: http?.corsAllowedOrigins ?? true,
       credentials: http?.corsAllowCredentials ?? false,
-    }),
+    })
   );
 
   if (kycService) {
@@ -122,28 +122,26 @@ export function createApp({
 
   // FORCE RATE LIMITER (tests depend on it)
   if (http?.rateLimit?.enabled !== false) {
-  applyRateLimiters(app, appLogger, {
-  global: http?.rateLimit
-    ? {
-        windowMs: http.rateLimit.windowMs ?? 60_000,
-        max: http.rateLimit.max ?? 100,
-      }
-    : undefined,
-});
-}
+    applyRateLimiters(app, appLogger, {
+      global: http?.rateLimit
+        ? {
+            windowMs: http.rateLimit.windowMs ?? 60_000,
+            max: http.rateLimit.max ?? 100,
+          }
+        : undefined,
+    });
+  }
   app.use(
     createRequestObservabilityMiddleware({
       logger: appLogger,
       metricsEnabled,
       metricsRegistry,
-    }),
+    })
   );
 
   app.get("/health", (req, res) => {
     const requestId =
-      (req.headers["x-request-id"] as string) ||
-      (req as RequestWithId).requestId ||
-      "unknown";
+      (req.headers["x-request-id"] as string) || (req as RequestWithId).requestId || "unknown";
 
     res.setHeader("x-request-id", requestId);
 
@@ -212,7 +210,7 @@ export function createApp({
         authService,
         contractGuardService,
         contractId: pauseGuardContractId,
-      }),
+      })
     );
   }
 
@@ -223,7 +221,7 @@ export function createApp({
         settlementService,
         contractGuardService,
         contractId: pauseGuardContractId,
-      }),
+      })
     );
   }
 
@@ -234,7 +232,7 @@ export function createApp({
   if (config?.admin?.ipWhitelist?.length) {
     app.use(
       "/api/v1/admin",
-      createAdminRouter({ dataSource, allowedCidrs: config.admin.ipWhitelist, invoiceService }),
+      createAdminRouter({ dataSource, allowedCidrs: config.admin.ipWhitelist, invoiceService })
     );
   }
 

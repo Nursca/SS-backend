@@ -90,8 +90,7 @@ export class ReconcilePendingStellarStateWorker {
     });
     this.now = dependencies.now ?? (() => new Date());
     this.yieldControl =
-      dependencies.yieldControl ??
-      (() => new Promise((resolve) => setImmediate(resolve)));
+      dependencies.yieldControl ?? (() => new Promise((resolve) => setImmediate(resolve)));
     this.setIntervalFn = dependencies.setIntervalFn ?? setInterval;
     this.clearIntervalFn = dependencies.clearIntervalFn ?? clearInterval;
   }
@@ -134,10 +133,7 @@ export class ReconcilePendingStellarStateWorker {
     const deadline = startedAt.getTime() + this.config.maxRuntimeMs;
 
     try {
-      const candidates = await this.repository.findPendingCandidates(
-        cutoff,
-        this.config.batchSize,
-      );
+      const candidates = await this.repository.findPendingCandidates(cutoff, this.config.batchSize);
 
       this.attemptTracker.clear();
 
@@ -259,12 +255,10 @@ export class ReconcilePendingStellarStateWorker {
   }
 }
 
-class TypeOrmReconciliationCandidateRepository
-  implements ReconciliationCandidateRepository
-{
+class TypeOrmReconciliationCandidateRepository implements ReconciliationCandidateRepository {
   constructor(
     private readonly investmentRepository: Repository<Investment>,
-    private readonly transactionRepository: Repository<Transaction>,
+    private readonly transactionRepository: Repository<Transaction>
   ) {}
 
   async findPendingCandidates(olderThan: Date, limit: number): Promise<ReconciliationCandidate[]> {
@@ -337,12 +331,12 @@ export function createReconcilePendingStellarStateWorker(
   dataSource: DataSource,
   paymentVerifier: VerifyPaymentService,
   config: AppConfig["reconciliation"],
-  logger: AppLogger,
+  logger: AppLogger
 ): ReconcilePendingStellarStateWorker {
   return new ReconcilePendingStellarStateWorker({
     repository: new TypeOrmReconciliationCandidateRepository(
       dataSource.getRepository(Investment),
-      dataSource.getRepository(Transaction),
+      dataSource.getRepository(Transaction)
     ),
     paymentVerifier,
     config,
