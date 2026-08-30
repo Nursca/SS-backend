@@ -119,7 +119,7 @@ function seedPendingInvoice(repo: InMemoryInvoiceRepository, sellerId: string): 
     createdAt: now,
     updatedAt: now,
     deletedAt: null,
-    seller: undefined as unknown as Invoice["seller"],
+    seller: { id: sellerId, stellarAddress: "GTEST" } as unknown as Invoice["seller"],
     investments: [],
     transactions: [],
   } as Invoice;

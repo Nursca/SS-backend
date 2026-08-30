@@ -492,6 +492,67 @@ export class InvoiceService {
   }
 
   /**
+   * Reject a pending invoice (admin action)
+   */
+  async rejectInvoice(input: { invoiceId: string; rejectionReason: string }): Promise<InvoiceDTO> {
+    const invoice = await this.invoiceRepository.findOne({
+      where: { id: input.invoiceId },
+      relations: ["seller"],
+    });
+
+    if (!invoice) {
+      throw new ServiceError("invoice_not_found", "Invoice not found", 404);
+    }
+
+    // Check if already rejected
+    if (invoice.status === InvoiceStatus.REJECTED) {
+      throw new ServiceError("invoice_already_rejected", "Invoice is already rejected", 409);
+    }
+
+    // Check if transition is valid
+    if (!this.isValidTransition(invoice.status, InvoiceStatus.REJECTED)) {
+      throw new ServiceError(
+        "invalid_status_transition",
+        `Cannot transition from ${invoice.status} to ${InvoiceStatus.REJECTED}`,
+        409
+      );
+    }
+
+    const previousStatus = invoice.status;
+    invoice.status = InvoiceStatus.REJECTED;
+    invoice.rejectionReason = input.rejectionReason.trim();
+    const updated = await this.invoiceRepository.save(invoice);
+
+    const seller = invoice.seller as unknown as User;
+    logInvoiceTransition(logger, {
+      invoiceId: updated.id,
+      fromState: previousStatus,
+      toState: InvoiceStatus.REJECTED,
+      actorWallet: seller?.stellarAddress ?? "admin",
+      reason: "admin_rejected",
+    });
+
+    // Notify seller if notification sink is available
+    if (this.notificationSink && seller) {
+      try {
+        await this.notificationSink.createNotification(
+          seller.id,
+          NotificationType.INVOICE,
+          "Invoice Rejected",
+          `Your invoice ${invoice.invoiceNumber} has been rejected: ${input.rejectionReason}`
+        );
+      } catch (notifyError) {
+        logger.warn("Failed to notify seller of invoice rejection", {
+          error: notifyError,
+          invoiceId: invoice.id,
+        });
+      }
+    }
+
+    return this.toDTO(updated);
+  }
+
+  /**
    * Publish several draft invoices in one atomic step.
    *
    * Sellers with large receivable books were publishing twenty invoices with
