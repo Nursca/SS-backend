@@ -9,6 +9,7 @@ import {
 } from "stellar-sdk";
 import type { AppLogger } from "../../observability/logger";
 import { logger as globalLogger } from "../../observability/logger";
+import { ServiceError } from "../../utils/service-error";
 import type {
   CreateEscrowParams,
   CreateEscrowResult,
@@ -29,6 +30,8 @@ export interface InvoiceEscrowContractServiceDependencies {
   platformSecretKey?: string;
   server?: SorobanRpc.Server;
   logger?: AppLogger;
+  confirmationPollMs?: number;
+  confirmationAttempts?: number;
 }
 
 export class InvoiceEscrowContractService {
@@ -38,24 +41,28 @@ export class InvoiceEscrowContractService {
   private readonly networkPassphrase?: string;
   private readonly platformSecretKey?: string;
   private readonly logger: AppLogger;
+  private readonly confirmationPollMs: number;
+  private readonly confirmationAttempts: number;
 
   constructor(
     dependenciesOrContractId: string | InvoiceEscrowContractServiceDependencies,
     logger?: AppLogger
   ) {
     if (typeof dependenciesOrContractId === "string") {
-      if (!dependenciesOrContractId) {
+      if (!dependenciesOrContractId || !dependenciesOrContractId.trim()) {
         throw new Error("contractId is required.");
       }
-      this.contractId = dependenciesOrContractId;
-      this.contract = new Contract(dependenciesOrContractId);
+      this.contractId = dependenciesOrContractId.trim();
+      this.contract = new Contract(this.contractId);
       this.logger = logger ?? globalLogger;
+      this.confirmationPollMs = 1000;
+      this.confirmationAttempts = 20;
     } else {
-      if (!dependenciesOrContractId.contractId) {
+      if (!dependenciesOrContractId.contractId || !dependenciesOrContractId.contractId.trim()) {
         throw new Error("contractId is required.");
       }
-      this.contractId = dependenciesOrContractId.contractId;
-      this.contract = new Contract(dependenciesOrContractId.contractId);
+      this.contractId = dependenciesOrContractId.contractId.trim();
+      this.contract = new Contract(this.contractId);
       this.networkPassphrase = dependenciesOrContractId.networkPassphrase;
       this.platformSecretKey = dependenciesOrContractId.platformSecretKey;
       if (dependenciesOrContractId.server) {
@@ -66,6 +73,23 @@ export class InvoiceEscrowContractService {
         });
       }
       this.logger = dependenciesOrContractId.logger ?? logger ?? globalLogger;
+      this.confirmationPollMs = dependenciesOrContractId.confirmationPollMs ?? 1000;
+      this.confirmationAttempts = dependenciesOrContractId.confirmationAttempts ?? 20;
+    }
+  }
+
+  private parseStroopAmount(amount: bigint | number | string, fieldName = "amountStroops"): bigint {
+    try {
+      const parsed = typeof amount === "bigint" ? amount : BigInt(amount);
+      if (parsed <= 0n) {
+        throw new Error(`${fieldName} must be positive.`);
+      }
+      return parsed;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("must be positive")) {
+        throw error;
+      }
+      throw new Error(`Invalid ${fieldName}: ${String(amount)}`);
     }
   }
 
@@ -80,14 +104,29 @@ export class InvoiceEscrowContractService {
     paymentTokenAddress: string
   ): xdr.Operation {
     const amountBigInt = typeof amountStroops === "bigint" ? amountStroops : BigInt(amountStroops);
+    if (!invoiceId || typeof invoiceId !== "string" || !invoiceId.trim()) {
+      throw new Error("invoiceId is required.");
+    }
+    if (!sellerAddress || typeof sellerAddress !== "string" || !sellerAddress.trim()) {
+      throw new Error("sellerAddress is required.");
+    }
+    if (!Number.isFinite(dueDateTimestamp) || dueDateTimestamp <= 0) {
+      throw new Error("dueDateTimestamp must be a positive number.");
+    }
+    if (!paymentTokenAddress || typeof paymentTokenAddress !== "string" || !paymentTokenAddress.trim()) {
+      throw new Error("paymentTokenAddress is required.");
+    }
+
+    const amountBigInt = this.parseStroopAmount(amountStroops, "amountStroops");
 
     return this.contract.call(
       "create_escrow",
-      nativeToScVal(invoiceId, { type: "symbol" }),
-      new Address(sellerAddress).toScVal(),
+      nativeToScVal(invoiceId.trim(), { type: "symbol" }),
+      new Address(sellerAddress.trim()).toScVal(),
       nativeToScVal(amountBigInt, { type: "i128" }),
       nativeToScVal(dueDateTimestamp, { type: "u64" }),
       new Address(paymentTokenAddress).toScVal()
+      new Address(paymentTokenAddress.trim()).toScVal(),
     );
   }
 
@@ -106,6 +145,20 @@ export class InvoiceEscrowContractService {
       nativeToScVal(invoiceId, { type: "symbol" }),
       new Address(investorAddress).toScVal(),
       nativeToScVal(amountBigInt, { type: "i128" })
+    if (!invoiceId || typeof invoiceId !== "string" || !invoiceId.trim()) {
+      throw new Error("invoiceId is required.");
+    }
+    if (!investorAddress || typeof investorAddress !== "string" || !investorAddress.trim()) {
+      throw new Error("investorAddress is required.");
+    }
+
+    const amountBigInt = this.parseStroopAmount(amountStroops, "amountStroops");
+
+    return this.contract.call(
+      "fund_escrow",
+      nativeToScVal(invoiceId.trim(), { type: "symbol" }),
+      new Address(investorAddress.trim()).toScVal(),
+      nativeToScVal(amountBigInt, { type: "i128" }),
     );
   }
 
@@ -124,6 +177,20 @@ export class InvoiceEscrowContractService {
       nativeToScVal(invoiceId, { type: "symbol" }),
       new Address(payerAddress).toScVal(),
       nativeToScVal(amountBigInt, { type: "i128" })
+    if (!invoiceId || typeof invoiceId !== "string" || !invoiceId.trim()) {
+      throw new Error("invoiceId is required.");
+    }
+    if (!payerAddress || typeof payerAddress !== "string" || !payerAddress.trim()) {
+      throw new Error("payerAddress is required.");
+    }
+
+    const amountBigInt = this.parseStroopAmount(amountStroops, "amountStroops");
+
+    return this.contract.call(
+      "record_payment",
+      nativeToScVal(invoiceId.trim(), { type: "symbol" }),
+      new Address(payerAddress.trim()).toScVal(),
+      nativeToScVal(amountBigInt, { type: "i128" }),
     );
   }
 
@@ -132,6 +199,14 @@ export class InvoiceEscrowContractService {
    */
   public buildSettleEscrowTx(invoiceId: string): xdr.Operation {
     return this.contract.call("settle_escrow", nativeToScVal(invoiceId, { type: "symbol" }));
+    if (!invoiceId || typeof invoiceId !== "string" || !invoiceId.trim()) {
+      throw new Error("invoiceId is required.");
+    }
+
+    return this.contract.call(
+      "settle_escrow",
+      nativeToScVal(invoiceId.trim(), { type: "symbol" }),
+    );
   }
 
   /**
@@ -144,7 +219,21 @@ export class InvoiceEscrowContractService {
       throw new Error("Soroban RPC server is not configured for simulation.");
     }
 
-    const simResponse = await this.rpcServer.simulateTransaction(transaction);
+    let simResponse: Awaited<ReturnType<SorobanRpc.Server["simulateTransaction"]>>;
+    try {
+      simResponse = await this.rpcServer.simulateTransaction(transaction);
+    } catch (error) {
+      this.logger.error("Soroban simulateTransaction call failed.", {
+        sorobanContractId: this.contractId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new ServiceError(
+        "soroban_simulation_failed",
+        "Failed to simulate the transaction against the Soroban RPC endpoint.",
+        502,
+      );
+    }
+
     const successResponse = simResponse as unknown as {
       minResourceFee?: string;
       cost?: { cpuInsns?: string; memBytes?: string };
@@ -178,12 +267,83 @@ export class InvoiceEscrowContractService {
       throw new Error("Soroban RPC server is not configured for submission.");
     }
 
-    const response = await this.rpcServer.sendTransaction(transaction);
+    let response: Awaited<ReturnType<SorobanRpc.Server["sendTransaction"]>>;
+    try {
+      response = await this.rpcServer.sendTransaction(transaction);
+    } catch (error) {
+      this.logger.error("Soroban sendTransaction call failed.", {
+        sorobanContractId: this.contractId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new ServiceError(
+        "soroban_submission_failed",
+        "Failed to submit the transaction to the Soroban RPC endpoint.",
+        502,
+      );
+    }
+
     return {
       status: response.status,
       txHash: response.hash,
       errorResult: response.errorResult,
     };
+  }
+
+  /**
+   * Polls for transaction confirmation until it reaches SUCCESS, FAILED, or times out.
+   */
+  public async waitForTransactionConfirmation(
+    txHash: string,
+  ): Promise<{ status: "SUCCESS" | "FAILED" | "NOT_FOUND"; ledger: number | null }> {
+    if (!this.rpcServer) {
+      throw new Error("Soroban RPC server is not configured for transaction confirmation polling.");
+    }
+    if (!txHash || !txHash.trim()) {
+      throw new Error("txHash is required.");
+    }
+
+    for (let attempt = 0; attempt < this.confirmationAttempts; attempt++) {
+      try {
+        const result = await this.rpcServer.getTransaction(txHash);
+        if (result.status === "SUCCESS") {
+          this.logger.info("Soroban transaction confirmed on-chain.", {
+            txHash,
+            sorobanContractId: this.contractId,
+            ledger: "ledger" in result ? Number(result.ledger) : null,
+          });
+          return {
+            status: "SUCCESS",
+            ledger: "ledger" in result ? Number(result.ledger) : null,
+          };
+        }
+        if (result.status === "FAILED") {
+          this.logger.error("Soroban transaction reverted on-chain.", {
+            txHash,
+            sorobanContractId: this.contractId,
+          });
+          return { status: "FAILED", ledger: null };
+        }
+      } catch (error) {
+        this.logger.warn("Transient error while checking transaction status", {
+          txHash,
+          attempt: attempt + 1,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, this.confirmationPollMs));
+    }
+
+    this.logger.error("Timed out waiting for transaction confirmation.", {
+      txHash,
+      sorobanContractId: this.contractId,
+      attempts: this.confirmationAttempts,
+    });
+    throw new ServiceError(
+      "transaction_confirmation_timeout",
+      "Timed out waiting for transaction confirmation on-chain.",
+      504,
+    );
   }
 
   /**
@@ -194,6 +354,10 @@ export class InvoiceEscrowContractService {
   public async createEscrowOnChain(input: CreateEscrowInput): Promise<CreateEscrowResult> {
     const amountBigInt =
       typeof input.amountStroops === "bigint" ? input.amountStroops : BigInt(input.amountStroops);
+  public async createEscrowOnChain(
+    input: CreateEscrowInput,
+  ): Promise<CreateEscrowResult> {
+    const amountBigInt = this.parseStroopAmount(input.amountStroops, "amountStroops");
 
     const operation = this.buildCreateEscrowTx(
       input.invoiceId,

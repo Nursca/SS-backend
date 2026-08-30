@@ -8,6 +8,12 @@ import { User } from "../models/User.model";
 import type { PublicUser } from "../types/auth";
 import { HttpError } from "../utils/http-error";
 import { buildAuthFailureDetails, classifyJwtError } from "../lib/auth-failure";
+import { AppError, HttpError } from "../utils/http-error";
+import { logger } from "../observability/logger";
+import {
+  buildAuthFailureDetails,
+  classifyJwtError,
+} from "../lib/auth-failure";
 import type { AppLogger } from "../observability/logger";
 import { buildWalletChallenge } from "../utils/stellar-challenge";
 import { MetricsRegistry } from "../observability/metrics";

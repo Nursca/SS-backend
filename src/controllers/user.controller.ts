@@ -3,6 +3,7 @@ import type { AuthenticatedRequest } from "../types/auth";
 import { HttpError, AppError } from "../utils/http-error";
 import { logger as defaultLogger, type AppLogger } from "../observability/logger";
 import { isValidStellarPublicKey } from "../utils/stellar-address.utils";
+import { UserType } from "../types/enums";
 
 export interface UserRepositoryContract {
   findById(id: string): Promise<import("../models/User.model").User | null>;
@@ -116,6 +117,7 @@ export function createUserController(deps: UserControllerDeps) {
         if (!rawId) {
           throw new HttpError(400, "Invalid user id");
         }
+        // Consistent 404 response if user does not exist
         const user = await userRepository.findById(rawId);
         if (!user) {
           throw new HttpError(404, "User not found");
@@ -149,6 +151,7 @@ export function createUserController(deps: UserControllerDeps) {
 
         const email = sanitizeString(req.body?.email, 255);
         const stellarAddressRaw = sanitizeString(req.body?.stellarAddress, 56);
+        const userTypeRaw = req.body?.userType;
 
         if (email !== null) {
           const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -165,7 +168,15 @@ export function createUserController(deps: UserControllerDeps) {
           throw new HttpError(400, "Invalid Stellar public key");
         }
 
-        if (email === null && stellarAddressRaw === null) {
+        if (
+          userTypeRaw !== undefined &&
+          userTypeRaw !== null &&
+          !Object.values(UserType).includes(userTypeRaw)
+        ) {
+          throw new HttpError(400, "Invalid user type");
+        }
+
+        if (email === null && stellarAddressRaw === null && (userTypeRaw === undefined || userTypeRaw === null)) {
           throw new HttpError(400, "No valid fields to update");
         }
 
@@ -175,8 +186,9 @@ export function createUserController(deps: UserControllerDeps) {
         }
 
         const patch: Partial<import("../models/User.model").User> = {};
-        if (email !== null) patch.email = email;
+        if (email !== null) patch.email = email.toLowerCase();
         if (stellarAddressRaw !== null) patch.stellarAddress = stellarAddressRaw;
+        if (userTypeRaw) patch.userType = userTypeRaw;
 
         const updated = await userRepository.save({ ...existing, ...patch });
 
@@ -263,6 +275,14 @@ export function createUserController(deps: UserControllerDeps) {
             users = fetchedUsers;
             total = fetchedTotal;
           }
+          // Parallelized data and count fetching for high concurrency performance
+          const [fetchedUsers, fetchedCount] = await Promise.all([
+            userRepository.findAll({ skip: (page - 1) * limit, take: limit }),
+            userRepository.count ? userRepository.count() : Promise.resolve(-1),
+          ]);
+
+          users = fetchedUsers;
+          total = fetchedCount >= 0 ? fetchedCount : users.length;
         } catch (error) {
           appLogger.error("Failed to list users", { error, requestId });
           throw new AppError(500, "Failed to list users", "USER_LIST_FAILED");

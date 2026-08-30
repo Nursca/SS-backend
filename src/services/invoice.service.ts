@@ -1,4 +1,4 @@
-import { DataSource } from "typeorm";
+import { DataSource, In } from "typeorm";
 import Decimal from "decimal.js";
 import { Invoice } from "../models/Invoice.model";
 import { Investment } from "../models/Investment.model";
@@ -8,16 +8,22 @@ import { ServiceError } from "../utils/service-error";
 import { validateInvoiceForPublish } from "../lib/validate-invoice-for-publish";
 import { logInvoiceTransition } from "../lib/invoice-lifecycle-log";
 import { logger } from "../observability/logger";
+import { AppError } from "../utils/http-error";
 import type { IPFSService, IPFSUploadResult } from "./ipfs.service";
 
 export interface InvoiceRepositoryContract {
   findOne(options: { where: { id: string }; relations?: string[] }): Promise<Invoice | null>;
   findOneBy(options: { id?: string; invoiceNumber?: string }): Promise<Invoice | null>;
   find(options: {
-    where: { sellerId: string; status?: InvoiceStatus };
+    where: {
+      sellerId?: string;
+      status?: InvoiceStatus;
+      id?: ReturnType<typeof In<string>>;
+    };
     skip?: number;
     take?: number;
     order?: { [key: string]: "ASC" | "DESC" };
+    relations?: string[];
   }): Promise<Invoice[]>;
   save(invoice: Invoice): Promise<Invoice>;
   count(options: { where: { sellerId: string; status?: InvoiceStatus } }): Promise<number>;
@@ -88,6 +94,11 @@ export interface UpdateInvoiceInput {
 export interface PublishInvoiceInput {
   invoiceId: string;
   sellerId: string;
+}
+
+export interface RejectInvoiceInput {
+  invoiceId: string;
+  rejectionReason: string;
 }
 
 export interface BatchPublishInvoicesInput {
@@ -343,95 +354,188 @@ export class InvoiceService {
    * Update an invoice (only draft invoices can be updated)
    */
   async updateInvoice(input: UpdateInvoiceInput): Promise<InvoiceDTO> {
-    const invoice = await this.invoiceRepository.findOne({
-      where: { id: input.invoiceId },
-    });
+    try {
+      const invoice = await this.invoiceRepository.findOne({
+        where: { id: input.invoiceId },
+      });
 
-    if (!invoice) {
-      throw new ServiceError("invoice_not_found", "Invoice not found", 404);
-    }
+      if (!invoice) {
+        throw new ServiceError("invoice_not_found", "Invoice not found", 404);
+      }
 
-    // Verify ownership
-    if (invoice.sellerId !== input.sellerId) {
-      throw new ServiceError(
-        "unauthorized_invoice_access",
-        "You can only update your own invoices",
-        403
-      );
-    }
+      // Verify ownership
+      if (invoice.sellerId !== input.sellerId) {
+        throw new ServiceError(
+          "unauthorized_invoice_access",
+          "You can only update your own invoices",
+          403
+        );
+      }
 
-    // Only draft invoices can be updated
-    if (invoice.status !== InvoiceStatus.DRAFT) {
-      throw new ServiceError(
-        "invalid_invoice_status",
-        `Cannot update invoice in ${invoice.status} status. Only draft invoices can be updated.`,
-        400
-      );
-    }
+      // Only draft invoices can be updated
+      if (invoice.status !== InvoiceStatus.DRAFT) {
+        throw new ServiceError(
+          "invalid_invoice_status",
+          `Cannot update invoice in ${invoice.status} status. Only draft invoices can be updated.`,
+          400
+        );
+      }
 
-    // Update fields
-    if (input.customerName) {
-      invoice.customerName = input.customerName;
-    }
-    if (input.amount) {
-      invoice.amount = input.amount;
-      invoice.discountRate = input.discountRate || invoice.discountRate;
-      invoice.netAmount = this.calculateNetAmount(invoice.amount, invoice.discountRate);
-    } else if (input.discountRate) {
-      invoice.discountRate = input.discountRate;
-      invoice.netAmount = this.calculateNetAmount(invoice.amount, invoice.discountRate);
-    }
-    if (input.dueDate) {
-      invoice.dueDate = input.dueDate;
-    }
-    if (input.riskScore) {
-      invoice.riskScore = input.riskScore;
-    }
+      // Update fields
+      if (input.customerName) {
+        invoice.customerName = input.customerName;
+      }
+      if (input.amount) {
+        invoice.amount = input.amount;
+        invoice.discountRate = input.discountRate || invoice.discountRate;
+        invoice.netAmount = this.calculateNetAmount(invoice.amount, invoice.discountRate);
+      } else if (input.discountRate) {
+        invoice.discountRate = input.discountRate;
+        invoice.netAmount = this.calculateNetAmount(invoice.amount, invoice.discountRate);
+      }
+      if (input.dueDate) {
+        invoice.dueDate = input.dueDate;
+      }
+      if (input.riskScore) {
+        invoice.riskScore = input.riskScore;
+      }
 
-    const updated = await this.invoiceRepository.save(invoice);
-    return this.toDTO(updated);
+      const updated = await this.invoiceRepository.save(invoice);
+      return this.toDTO(updated);
+    } catch (error) {
+      if (error instanceof ServiceError) throw error;
+      logger.error('Failed to process', { error });
+      throw new AppError(500, 'Processing failed', 'PROCESSING_FAILED', { error });
+    }
   }
 
   /**
    * Soft delete an invoice
    */
   async deleteInvoice(invoiceId: string, sellerId: string): Promise<void> {
-    const invoice = await this.invoiceRepository.findOne({
-      where: { id: invoiceId },
-    });
+    try {
+      const invoice = await this.invoiceRepository.findOne({
+        where: { id: invoiceId },
+      });
 
-    if (!invoice) {
-      throw new ServiceError("invoice_not_found", "Invoice not found", 404);
+      if (!invoice) {
+        throw new ServiceError("invoice_not_found", "Invoice not found", 404);
+      }
+
+      // Verify ownership
+      if (invoice.sellerId !== sellerId) {
+        throw new ServiceError(
+          "unauthorized_invoice_access",
+          "You can only delete your own invoices",
+          403
+        );
+      }
+
+      // Only draft and cancelled invoices can be deleted
+      if (invoice.status !== InvoiceStatus.DRAFT && invoice.status !== InvoiceStatus.CANCELLED) {
+        throw new ServiceError(
+          "invalid_invoice_status",
+          `Cannot delete invoice in ${invoice.status} status`,
+          400
+        );
+      }
+
+      invoice.deletedAt = new Date();
+      await this.invoiceRepository.save(invoice);
+    } catch (error) {
+      if (error instanceof ServiceError) throw error;
+      logger.error('Failed to process', { error });
+      throw new AppError(500, 'Processing failed', 'PROCESSING_FAILED', { error });
     }
-
-    // Verify ownership
-    if (invoice.sellerId !== sellerId) {
-      throw new ServiceError(
-        "unauthorized_invoice_access",
-        "You can only delete your own invoices",
-        403
-      );
-    }
-
-    // Only draft and cancelled invoices can be deleted
-    if (invoice.status !== InvoiceStatus.DRAFT && invoice.status !== InvoiceStatus.CANCELLED) {
-      throw new ServiceError(
-        "invalid_invoice_status",
-        `Cannot delete invoice in ${invoice.status} status`,
-        400
-      );
-    }
-
-    invoice.deletedAt = new Date();
-    await this.invoiceRepository.save(invoice);
   }
 
   /**
    * Publish an invoice (transition from DRAFT to PUBLISHED)
    */
   async publishInvoice(input: PublishInvoiceInput): Promise<InvoiceDTO> {
+    try {
+      const invoice = await this.invoiceRepository.findOne({
+        where: { id: input.invoiceId },
+        relations: ["seller"],
+      });
+
+      if (!invoice) {
+        throw new ServiceError("invoice_not_found", "Invoice not found", 404);
+      }
+
+      // Verify ownership
+      if (invoice.sellerId !== input.sellerId) {
+        throw new ServiceError(
+          "unauthorized_invoice_access",
+          "You can only publish your own invoices",
+          403
+        );
+      }
+
+      // Check KYC status
+      const seller = invoice.seller as unknown as User;
+      if (!seller || seller.kycStatus !== KYCStatus.APPROVED) {
+        throw new ServiceError(
+          "kyc_approval_required",
+          "KYC approval is required to publish invoices",
+          403
+        );
+      }
+
+      // Check if transition is valid
+      if (!this.isValidTransition(invoice.status, InvoiceStatus.PUBLISHED)) {
+        throw new ServiceError(
+          "invalid_status_transition",
+          `Cannot transition from ${invoice.status} to ${InvoiceStatus.PUBLISHED}`,
+          400
+        );
+      }
+
+      const validationErrors = validateInvoiceForPublish(invoice);
+      if (validationErrors.length > 0) {
+        throw new ServiceError(
+          "invoice_not_publishable",
+          `Invoice failed pre-publish validation: ${validationErrors.map((e) => e.message).join(" ")}`,
+          400,
+        );
+      }
+
+      const previousStatus = invoice.status;
+      invoice.status = InvoiceStatus.PUBLISHED;
+      const updated = await this.invoiceRepository.save(invoice);
+
+      logInvoiceTransition(logger, {
+        invoiceId: updated.id,
+        fromState: previousStatus,
+        toState: InvoiceStatus.PUBLISHED,
+        actorWallet: seller.stellarAddress,
+        reason: "seller_published",
+      });
+
+      return this.toDTO(updated);
+    } catch (error) {
+      if (error instanceof ServiceError) throw error;
+      logger.error('Failed to process', { error });
+      throw new AppError(500, 'Processing failed', 'PROCESSING_FAILED', { error });
+    }
+  }
+
+  /**
+   * Reject an invoice (admin operation)
+   */
+  async rejectInvoice(input: RejectInvoiceInput): Promise<InvoiceDTO> {
+    const invoiceId = input.invoiceId?.trim();
+    const rejectionReason = input.rejectionReason?.trim();
+
+    if (!invoiceId) {
+      throw new ServiceError("invalid_invoice_id", "Invoice id is required", 400);
+    }
+    if (!rejectionReason) {
+      throw new ServiceError("invalid_rejection_reason", "Rejection reason is required", 400);
+    }
+
     const invoice = await this.invoiceRepository.findOne({
-      where: { id: input.invoiceId },
+      where: { id: invoiceId },
       relations: ["seller"],
     });
 
@@ -439,27 +543,15 @@ export class InvoiceService {
       throw new ServiceError("invoice_not_found", "Invoice not found", 404);
     }
 
-    // Verify ownership
-    if (invoice.sellerId !== input.sellerId) {
+    if (invoice.status === InvoiceStatus.REJECTED) {
       throw new ServiceError(
-        "unauthorized_invoice_access",
-        "You can only publish your own invoices",
-        403
+        "invoice_already_rejected",
+        "Invoice has already been rejected",
+        409,
       );
     }
 
-    // Check KYC status
-    const seller = invoice.seller as unknown as User;
-    if (!seller || seller.kycStatus !== KYCStatus.APPROVED) {
-      throw new ServiceError(
-        "kyc_approval_required",
-        "KYC approval is required to publish invoices",
-        403
-      );
-    }
-
-    // Check if transition is valid
-    if (!this.isValidTransition(invoice.status, InvoiceStatus.PUBLISHED)) {
+    if (!this.isValidTransition(invoice.status, InvoiceStatus.REJECTED)) {
       throw new ServiceError(
         "invalid_status_transition",
         `Cannot transition from ${invoice.status} to ${InvoiceStatus.PUBLISHED}`,
@@ -473,22 +565,36 @@ export class InvoiceService {
         "invoice_not_publishable",
         `Invoice failed pre-publish validation: ${validationErrors.map((e) => e.message).join(" ")}`,
         400
+        `Cannot transition invoice status from ${invoice.status} to ${InvoiceStatus.REJECTED}`,
+        409,
       );
     }
 
     const previousStatus = invoice.status;
-    invoice.status = InvoiceStatus.PUBLISHED;
-    const updated = await this.invoiceRepository.save(invoice);
+    invoice.status = InvoiceStatus.REJECTED;
+    invoice.rejectionReason = rejectionReason;
 
+    const saved = await this.invoiceRepository.save(invoice);
+
+    const seller = invoice.seller as unknown as User;
     logInvoiceTransition(logger, {
-      invoiceId: updated.id,
+      invoiceId: saved.id,
       fromState: previousStatus,
-      toState: InvoiceStatus.PUBLISHED,
-      actorWallet: seller.stellarAddress,
-      reason: "seller_published",
+      toState: InvoiceStatus.REJECTED,
+      actorWallet: seller?.stellarAddress ?? "admin",
+      reason: "admin_rejected",
     });
 
-    return this.toDTO(updated);
+    if (this.notificationSink) {
+      await this.notificationSink.createNotification(
+        invoice.sellerId,
+        NotificationType.INVOICE,
+        "Invoice Rejected",
+        `Your invoice was rejected: ${rejectionReason}`,
+      );
+    }
+
+    return this.toDTO(saved);
   }
 
   /**
@@ -590,7 +696,7 @@ export class InvoiceService {
     const publishable: Array<{ invoice: Invoice; sellerWallet: string }> = [];
     const rejections: BatchPublishRejection[] = [];
 
-    // Parallel fetch: avoids N sequential round-trips under heavy load (was ~N*~50ms)
+    // Batch fetch: single query with In(uniqueIds) avoids N round-trips
     let fetched: Array<{ invoiceId: string; invoice: Invoice | null }>;
     try {
       fetched = await Promise.all(
@@ -602,6 +708,15 @@ export class InvoiceService {
           }),
         }))
       );
+      const invoices = await this.invoiceRepository.find({
+        where: { id: In(uniqueIds) },
+        relations: ["seller"],
+      });
+      const byId = new Map(invoices.map((inv) => [inv.id, inv]));
+      fetched = uniqueIds.map((invoiceId) => ({
+        invoiceId,
+        invoice: byId.get(invoiceId) ?? null,
+      }));
     } catch (error) {
       logger.error("Failed to fetch batch invoices", { error, sellerId });
       throw new ServiceError(
@@ -782,6 +897,21 @@ export class InvoiceService {
         "Token holders can only be queried for published invoices",
         400
       );
+
+      // Update invoice with IPFS hash
+      invoice.ipfsHash = uploadResult.hash;
+      await this.invoiceRepository.save(invoice);
+
+      return {
+        invoiceId: input.invoiceId,
+        ipfsHash: uploadResult.hash,
+        fileSize: uploadResult.size,
+        uploadedAt: uploadResult.timestamp,
+      };
+    } catch (error) {
+      if (error instanceof ServiceError) throw error;
+      logger.error('Failed to process', { error });
+      throw new AppError(500, 'Processing failed', 'PROCESSING_FAILED', { error });
     }
 
     if (!this.dataSource) {
