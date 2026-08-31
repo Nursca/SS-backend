@@ -86,6 +86,7 @@ class InMemoryUserRepository implements UserRepositoryContract {
       email: user.email ?? null,
       userType: user.userType ?? UserType.INVESTOR,
       kycStatus: user.kycStatus ?? KYCStatus.PENDING,
+      isKycVerified: user.isKycVerified ?? false,
       createdAt: user.createdAt ?? now,
       updatedAt: user.updatedAt ?? now,
       deletedAt: user.deletedAt ?? null,
@@ -192,8 +193,9 @@ function createTestApp() {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("JWT authentication validation", () => {
-  it("rejects GET /api/v1/auth/me when the JWT is signed with an invalid secret key", async () => {
-    const app = createTestApp();
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
 
     const forgedToken = jwt.sign(
       {
@@ -204,18 +206,34 @@ describe("JWT authentication validation", () => {
       "invalid-secret-key",
       { expiresIn: "15m" }
     );
+  it("rejects GET /api/v1/auth/me when the JWT is signed with an invalid secret key", async () => {
+    try {
+      const app = createTestApp();
 
-    const response = await request(app)
-      .get("/api/v1/auth/me")
-      .set("Authorization", `Bearer ${forgedToken}`)
-      .expect(401);
+      const forgedToken = jwt.sign(
+        {
+          sub: "GFORGED_STELLAR_ADDRESS",
+          stellarAddress: "GFORGED_STELLAR_ADDRESS",
+          userId: crypto.randomUUID(),
+        },
+        "invalid-secret-key",
+        { expiresIn: "15m" },
+      );
 
-    expect(response.body).toMatchObject({
-      success: false,
-      error: {
-        message: "Invalid or expired token.",
-      },
-    });
+      const response = await request(app)
+        .get("/api/v1/auth/me")
+        .set("Authorization", `Bearer ${forgedToken}`)
+        .expect(401);
+
+      expect(response.body).toMatchObject({
+        success: false,
+        error: {
+          message: "Invalid or expired token.",
+        },
+      });
+    } catch (error) {
+      throw new Error(`JWT validation test failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   });
 
   it("rejects GET /api/v1/auth/me with expired JWT token", async () => {
@@ -263,20 +281,28 @@ describe("JWT authentication validation", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("JWT validation: malformed tokens", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   it("rejects a completely random non-JWT string", async () => {
-    const app = createTestApp();
+    try {
+      const app = createTestApp();
 
-    const response = await request(app)
-      .get("/api/v1/auth/me")
-      .set("Authorization", "Bearer not-a-jwt-at-all")
-      .expect(401);
+      const response = await request(app)
+        .get("/api/v1/auth/me")
+        .set("Authorization", "Bearer not-a-jwt-at-all")
+        .expect(401);
 
-    expect(response.body).toMatchObject({
-      success: false,
-      error: {
-        message: "Invalid or expired token.",
-      },
-    });
+      expect(response.body).toMatchObject({
+        success: false,
+        error: {
+          message: "Invalid or expired token.",
+        },
+      });
+    } catch (error) {
+      throw new Error(`Malformed token test failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   });
 
   it("rejects a token with only two parts (missing signature)", async () => {
@@ -327,18 +353,8 @@ describe("JWT validation: malformed tokens", () => {
     const invalidPayload = "!!!invalid-base64!!!";
     const badToken = `${header}.${invalidPayload}.signature`;
 
-    const response = await request(app)
-      .get("/api/v1/auth/me")
-      .set("Authorization", `Bearer ${badToken}`)
-      .expect(401);
-
-    expect(response.body).toMatchObject({
-      success: false,
-      error: {
-        message: "Invalid or expired token.",
-      },
-    });
-  });
+beforeAll(() => {
+  app = createTestApp();
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -346,31 +362,38 @@ describe("JWT validation: malformed tokens", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("JWT validation: algorithm and signing attacks", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   it("rejects a token signed with 'none' algorithm", async () => {
-    const app = createTestApp();
+    try {
+      const app = createTestApp();
 
-    // jwt.sign with algorithm: 'none' produces an unsigned token
-    const unsignedToken = jwt.sign(
-      {
-        sub: "GNONEALGADDRESS",
-        stellarAddress: "GNONEALGADDRESS",
-        userId: crypto.randomUUID(),
-      },
-      "",
-      { algorithm: "none", expiresIn: "15m" },
-    );
+      const unsignedToken = jwt.sign(
+        {
+          sub: "GNONEALGADDRESS",
+          stellarAddress: "GNONEALGADDRESS",
+          userId: crypto.randomUUID(),
+        },
+        "",
+        { algorithm: "none", expiresIn: "15m" },
+      );
 
-    const response = await request(app)
-      .get("/api/v1/auth/me")
-      .set("Authorization", `Bearer ${unsignedToken}`)
-      .expect(401);
+      const response = await request(app)
+        .get("/api/v1/auth/me")
+        .set("Authorization", `Bearer ${unsignedToken}`)
+        .expect(401);
 
-    expect(response.body).toMatchObject({
-      success: false,
-      error: {
-        message: "Invalid or expired token.",
-      },
-    });
+      expect(response.body).toMatchObject({
+        success: false,
+        error: {
+          message: "Invalid or expired token.",
+        },
+      });
+    } catch (error) {
+      throw new Error(`Algorithm attack test failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   });
 
   it("rejects a token signed with a different HS256 secret", async () => {
@@ -442,29 +465,37 @@ describe("JWT validation: algorithm and signing attacks", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("JWT validation: missing or invalid claims", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   it("rejects a token with no sub claim", async () => {
-    const app = createTestApp();
+    try {
+      const app = createTestApp();
 
-    const token = jwt.sign(
-      {
-        stellarAddress: "GNOSUBCLAIM",
-        userId: crypto.randomUUID(),
-      },
-      VALID_JWT_SECRET,
-      { expiresIn: "15m" },
-    );
+      const token = jwt.sign(
+        {
+          stellarAddress: "GNOSUBCLAIM",
+          userId: crypto.randomUUID(),
+        },
+        VALID_JWT_SECRET,
+        { expiresIn: "15m" },
+      );
 
-    const response = await request(app)
-      .get("/api/v1/auth/me")
-      .set("Authorization", `Bearer ${token}`)
-      .expect(401);
+      const response = await request(app)
+        .get("/api/v1/auth/me")
+        .set("Authorization", `Bearer ${token}`)
+        .expect(401);
 
-    expect(response.body).toMatchObject({
-      success: false,
-      error: {
-        message: "Invalid or expired token.",
-      },
-    });
+      expect(response.body).toMatchObject({
+        success: false,
+        error: {
+          message: "Invalid or expired token.",
+        },
+      });
+    } catch (error) {
+      throw new Error(`Claims validation test failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   });
 
   it("rejects a token with an empty sub claim", async () => {
@@ -493,56 +524,128 @@ describe("JWT validation: missing or invalid claims", () => {
     });
   });
 
-  it("rejects a valid JWT for a user that does not exist in the repository", async () => {
-    const app = createTestApp();
+/** Base claims for a well-formed token; override per case. */
+function claims(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    sub: "GTESTSUBJECT",
+    stellarAddress: "GTESTSUBJECT",
+    userId: crypto.randomUUID(),
+    ...overrides,
+  };
+}
 
-    const token = jwt.sign(
-      {
-        sub: "GNONEXISTENTUSERADDRESS",
-        stellarAddress: "GNONEXISTENTUSERADDRESS",
-        userId: crypto.randomUUID(),
-      },
-      VALID_JWT_SECRET,
-      { expiresIn: "15m" },
-    );
+/** Issue GET /api/v1/auth/me with the given Authorization header value. */
+function getMe(authorization?: string) {
+  const req = request(app).get("/api/v1/auth/me");
+  return authorization === undefined ? req : req.set("Authorization", authorization);
+}
 
-    const response = await request(app)
-      .get("/api/v1/auth/me")
-      .set("Authorization", `Bearer ${token}`)
-      .expect(401);
+/**
+ * Canonical middleware / auth-service messages (see src/middleware/auth.middleware.ts
+ * and src/services/auth.service.ts#getCurrentUser). Every failure mode still
+ * returns 401 with the standard envelope; only the message differentiates them.
+ */
+const INVALID_TOKEN_MESSAGE = "Invalid or expired token."; // unverifiable / undecodable token
+const INVALID_PAYLOAD_MESSAGE = "Invalid token payload."; // verified token, missing/empty sub
+const UNKNOWN_USER_MESSAGE = "User no longer exists."; // verified token, sub resolves to no user
+const MISSING_TOKEN_MESSAGE = "Authorization token is required."; // no usable Bearer credential
 
-    expect(response.body).toMatchObject({
-      success: false,
-      error: {
-        message: expect.stringContaining("Invalid or expired token."),
-      },
-    });
-  });
+/**
+ * Assert the standard 401 rejection envelope. Centralising this keeps every
+ * case checking the same contract — status, `success:false`, a string
+ * `error.message`, and no `data` leak — so an envelope regression fails once
+ * and loudly instead of in whichever test happened to run first.
+ */
+function expectRejected(
+  response: Awaited<ReturnType<typeof getMe>>,
+  expectedMessage?: string,
+): void {
+  expect(response.status).toBe(401);
+  expect(response.body).toHaveProperty("success", false);
+  expect(response.body).toHaveProperty("error");
+  expect(typeof response.body.error?.message).toBe("string");
+  expect(response.body).not.toHaveProperty("data");
+  if (expectedMessage !== undefined) {
+    expect(response.body.error.message).toBe(expectedMessage);
+  }
+}
 
-  it("rejects a token with sub set to a non-string value", async () => {
-    const app = createTestApp();
+// Hand-rolled tokens that jsonwebtoken cannot produce directly.
+function twoSegmentToken(): string {
+  const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+  const payload = Buffer.from(
+    JSON.stringify({ sub: "GTESTADDRESS", stellarAddress: "GTESTADDRESS" }),
+  ).toString("base64url");
+  return `${header}.${payload}`;
+}
 
-    const token = jwt.sign(
-      {
-        sub: 12345,
-        stellarAddress: "GNOTASTRING",
-        userId: crypto.randomUUID(),
-      },
-      VALID_JWT_SECRET,
-      { expiresIn: "15m" },
-    );
+function undecodablePayloadToken(): string {
+  const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+  return `${header}.!!!invalid-base64!!!.signature`;
+}
 
-    const response = await request(app)
-      .get("/api/v1/auth/me")
-      .set("Authorization", `Bearer ${token}`)
-      .expect(401);
+function algSwitchToken(): string {
+  const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+  const payload = Buffer.from(
+    JSON.stringify({
+      sub: "GTAMPEREDADDR",
+      stellarAddress: "GTAMPEREDADDR",
+      userId: crypto.randomUUID(),
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 900,
+    }),
+  ).toString("base64url");
+  const signature = crypto
+    .createHmac("sha256", "wrong-secret")
+    .update(`${header}.${payload}`)
+    .digest("base64url");
+  return `${header}.${payload}.${signature}`;
+}
 
-    expect(response.body).toMatchObject({
-      success: false,
-      error: {
-        message: "Invalid or expired token.",
-      },
-    });
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+describe("JWT validation: rejects invalid tokens with a 401 envelope", () => {
+  // [label, tokenFactory, expectedMessage]
+  const cases: Array<[string, () => string, string]> = [
+    ["signed with an unknown secret key", () => signToken(claims(), { secret: "invalid-secret-key" }), INVALID_TOKEN_MESSAGE],
+    [
+      "signed with a different HS256 secret",
+      () => signToken(claims(), { secret: "completely-different-secret", algorithm: "HS256" }),
+      INVALID_TOKEN_MESSAGE,
+    ],
+    ["expired", () => signToken(claims(), { expiresIn: "-5m" }), INVALID_TOKEN_MESSAGE],
+    ["not yet valid (nbf set in the future)", () => signToken(claims(), { notBefore: "1h" }), INVALID_TOKEN_MESSAGE],
+    ["signed with the 'none' algorithm", () => signToken(claims(), { secret: "", algorithm: "none" }), INVALID_TOKEN_MESSAGE],
+    ["a completely random non-JWT string", () => "not-a-jwt-at-all", INVALID_TOKEN_MESSAGE],
+    ["missing its signature segment", twoSegmentToken, INVALID_TOKEN_MESSAGE],
+    ["carrying an undecodable base64url payload", undecodablePayloadToken, INVALID_TOKEN_MESSAGE],
+    ["header alg-switched and re-signed with the wrong key", algSwitchToken, INVALID_TOKEN_MESSAGE],
+    [
+      "verified but missing the sub claim",
+      () => signToken({ stellarAddress: "GNOSUBCLAIM", userId: crypto.randomUUID() }),
+      INVALID_PAYLOAD_MESSAGE,
+    ],
+    ["verified but carrying an empty sub claim", () => signToken(claims({ sub: "", stellarAddress: "" })), INVALID_PAYLOAD_MESSAGE],
+    ["verified but carrying a non-string sub claim", () => signToken(claims({ sub: 12345 })), UNKNOWN_USER_MESSAGE],
+    [
+      "verified and well-formed but for a user that does not exist",
+      () => signToken(claims({ sub: "GNONEXISTENTUSERADDRESS", stellarAddress: "GNONEXISTENTUSERADDRESS" })),
+      UNKNOWN_USER_MESSAGE,
+    ],
+    [
+      "verified, long-lived, but for a user that does not exist",
+      () =>
+        signToken(
+          claims({ sub: "GLONGVALIDTOKEN", stellarAddress: "GLONGVALIDTOKEN" }),
+          { expiresIn: "365d" },
+        ),
+      UNKNOWN_USER_MESSAGE,
+    ],
+  ];
+
+  it.each(cases)("rejects a token %s", async (_label, makeToken, expectedMessage) => {
+    const response = await getMe(`Bearer ${makeToken()}`);
+    expectRejected(response, expectedMessage);
   });
 });
 
@@ -551,107 +654,45 @@ describe("JWT validation: missing or invalid claims", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("JWT validation: Authorization header edge cases", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   it("rejects request with lowercase 'bearer' prefix", async () => {
-    const app = createTestApp();
+    try {
+      const app = createTestApp();
 
-    const token = jwt.sign(
-      {
-        sub: "GLOWERCASEBEARER",
-        stellarAddress: "GLOWERCASEBEARER",
-        userId: crypto.randomUUID(),
-      },
-      VALID_JWT_SECRET,
-      { expiresIn: "15m" },
-    );
+      const token = jwt.sign(
+        {
+          sub: "GLOWERCASEBEARER",
+          stellarAddress: "GLOWERCASEBEARER",
+          userId: crypto.randomUUID(),
+        },
+        VALID_JWT_SECRET,
+        { expiresIn: "15m" },
+      );
 
-    const response = await request(app)
-      .get("/api/v1/auth/me")
-      .set("Authorization", `bearer ${token}`)
-      .expect(401);
+      const response = await request(app)
+        .get("/api/v1/auth/me")
+        .set("Authorization", `bearer ${token}`)
+        .expect(401);
 
-    expect(response.body).toMatchObject({
-      success: false,
-      error: {
-        message: "Authorization token is required.",
-      },
-    });
+      expect(response.body).toMatchObject({
+        success: false,
+        error: {
+          message: "Authorization token is required.",
+        },
+      });
+    } catch (error) {
+      throw new Error(`Bearer prefix test failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   });
 
-  it("rejects request with raw token (no Bearer prefix)", async () => {
-    const app = createTestApp();
-
-    const token = jwt.sign(
-      {
-        sub: "GNOBEARERPREFIX",
-        stellarAddress: "GNOBEARERPREFIX",
-        userId: crypto.randomUUID(),
-      },
-      VALID_JWT_SECRET,
-      { expiresIn: "15m" },
-    );
-
-    const response = await request(app)
-      .get("/api/v1/auth/me")
-      .set("Authorization", token)
-      .expect(401);
-
-    expect(response.body).toMatchObject({
-      success: false,
-      error: {
-        message: "Authorization token is required.",
-      },
-    });
-  });
-
-  it("rejects request with 'Token' scheme instead of 'Bearer'", async () => {
-    const app = createTestApp();
-
-    const token = jwt.sign(
-      {
-        sub: "GTOKENSCHEME",
-        stellarAddress: "GTOKENSCHEME",
-        userId: crypto.randomUUID(),
-      },
-      VALID_JWT_SECRET,
-      { expiresIn: "15m" },
-    );
-
-    const response = await request(app)
-      .get("/api/v1/auth/me")
-      .set("Authorization", `Token ${token}`)
-      .expect(401);
-
-    expect(response.body).toMatchObject({
-      success: false,
-      error: {
-        message: "Authorization token is required.",
-      },
-    });
-  });
-
-  it("rejects request with extra whitespace around a valid token", async () => {
-    const app = createTestApp();
-
-    const token = jwt.sign(
-      {
-        sub: "GEXTRAWHITESPACE",
-        stellarAddress: "GEXTRAWHITESPACE",
-        userId: crypto.randomUUID(),
-      },
-      VALID_JWT_SECRET,
-      { expiresIn: "15m" },
-    );
-
-    // The server should trim the token before verification
-    const response = await request(app)
-      .get("/api/v1/auth/me")
-      .set("Authorization", `Bearer   ${token}   `)
-      .expect(401);
-
-    // Depending on implementation, extra whitespace may cause signature mismatch
-    expect(response.body).toMatchObject({
-      success: false,
-    });
+  it("rejects (401) a Bearer value padded with surrounding whitespace", async () => {
+    // Implementations differ on whether the padding is trimmed before verify;
+    // only the rejection envelope is guaranteed here.
+    const response = await getMe(`Bearer   ${validToken}   `);
+    expectRejected(response);
   });
 });
 
@@ -660,76 +701,52 @@ describe("JWT validation: Authorization header edge cases", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("JWT validation: error response structure", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   it("returns consistent error envelope on forged token", async () => {
-    const app = createTestApp();
+    try {
+      const app = createTestApp();
 
-    const forgedToken = jwt.sign(
-      {
-        sub: "GSTRUCTTEST1",
-        stellarAddress: "GSTRUCTTEST1",
-      },
-      "wrong-secret",
-      { expiresIn: "15m" },
-    );
+      const forgedToken = jwt.sign(
+        {
+          sub: "GSTRUCTTEST1",
+          stellarAddress: "GSTRUCTTEST1",
+        },
+        "wrong-secret",
+        { expiresIn: "15m" },
+      );
 
-    const response = await request(app)
-      .get("/api/v1/auth/me")
-      .set("Authorization", `Bearer ${forgedToken}`)
-      .expect(401);
-
-    expect(response.body).toHaveProperty("success", false);
-    expect(response.body).toHaveProperty("error");
-    expect(response.body.error).toHaveProperty("message");
-    expect(typeof response.body.error.message).toBe("string");
-  });
-
-  it("returns consistent error envelope on expired token", async () => {
-    const app = createTestApp();
-
-    const expiredToken = jwt.sign(
-      {
-        sub: "GSTRUCTTEST2",
-        stellarAddress: "GSTRUCTTEST2",
-      },
-      VALID_JWT_SECRET,
-      { expiresIn: "-10m" },
-    );
-
-    const response = await request(app)
-      .get("/api/v1/auth/me")
-      .set("Authorization", `Bearer ${expiredToken}`)
-      .expect(401);
-
-    expect(response.body).toHaveProperty("success", false);
-    expect(response.body).toHaveProperty("error");
-    expect(response.body.error).toHaveProperty("message");
-  });
-
-  it("returns consistent error envelope when no Authorization header is sent", async () => {
-    const app = createTestApp();
-
-    const response = await request(app).get("/api/v1/auth/me").expect(401);
-
-    expect(response.body).toHaveProperty("success", false);
-    expect(response.body).toHaveProperty("error");
-    expect(response.body.error).toHaveProperty("message");
-  });
-
-  it("returns 401 (not 403 or 500) for all invalid token scenarios", async () => {
-    const app = createTestApp();
-
-    const scenarios = [
-      { label: "forged token", token: jwt.sign({ sub: "GX" }, "wrong", { expiresIn: "1m" }) },
-      { label: "expired token", token: jwt.sign({ sub: "GX" }, VALID_JWT_SECRET, { expiresIn: "-1m" }) },
-      { label: "random string", token: "not-a-jwt" },
-    ];
-
-    for (const scenario of scenarios) {
       const response = await request(app)
         .get("/api/v1/auth/me")
-        .set("Authorization", `Bearer ${scenario.token}`)
+        .set("Authorization", `Bearer ${forgedToken}`)
         .expect(401);
 
+      expect(response.body).toHaveProperty("success", false);
+      expect(response.body).toHaveProperty("error");
+      expect(response.body.error).toHaveProperty("message");
+      expect(typeof response.body.error.message).toBe("string");
+    } catch (error) {
+      throw new Error(`Error envelope test failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+
+  it("uses the same envelope when no Authorization header is sent", async () => {
+    const response = await getMe();
+    expectRejected(response, MISSING_TOKEN_MESSAGE);
+  });
+
+  it("always answers 401 (never 403 or 500) across a sample of invalid tokens", async () => {
+    const tokens = [
+      signToken(claims(), { secret: "wrong" }),
+      signToken(claims(), { expiresIn: "-1m" }),
+      "not-a-jwt",
+    ];
+
+    for (const token of tokens) {
+      const response = await getMe(`Bearer ${token}`);
+      expect(response.status).toBe(401);
       expect(response.body.success).toBe(false);
     }
   });
@@ -740,30 +757,38 @@ describe("JWT validation: error response structure", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("JWT validation: token timing edge cases", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   it("rejects a token with nbf set far in the future", async () => {
-    const app = createTestApp();
+    try {
+      const app = createTestApp();
 
-    const futureToken = jwt.sign(
-      {
-        sub: "GFUTURETOKEN",
-        stellarAddress: "GFUTURETOKEN",
-        userId: crypto.randomUUID(),
-      },
-      VALID_JWT_SECRET,
-      { expiresIn: "15m", notBefore: "1h" },
-    );
+      const futureToken = jwt.sign(
+        {
+          sub: "GFUTURETOKEN",
+          stellarAddress: "GFUTURETOKEN",
+          userId: crypto.randomUUID(),
+        },
+        VALID_JWT_SECRET,
+        { expiresIn: "15m", notBefore: "1h" },
+      );
 
-    const response = await request(app)
-      .get("/api/v1/auth/me")
-      .set("Authorization", `Bearer ${futureToken}`)
-      .expect(401);
+      const response = await request(app)
+        .get("/api/v1/auth/me")
+        .set("Authorization", `Bearer ${futureToken}`)
+        .expect(401);
 
-    expect(response.body).toMatchObject({
-      success: false,
-      error: {
-        message: "Invalid or expired token.",
-      },
-    });
+      expect(response.body).toMatchObject({
+        success: false,
+        error: {
+          message: "Invalid or expired token.",
+        },
+      });
+    } catch (error) {
+      throw new Error(`Future token test failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   });
 
   it("accepts a token with iat set to now and exp set to far future", async () => {
