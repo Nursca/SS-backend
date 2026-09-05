@@ -21,12 +21,7 @@ import type {
 } from "../../types/soroban.types";
 
 export type CreateEscrowInput = CreateEscrowParams;
-export type {
-  CreateEscrowResult,
-  FundEscrowParams,
-  RecordPaymentParams,
-  SettleEscrowParams,
-};
+export type { CreateEscrowResult, FundEscrowParams, RecordPaymentParams, SettleEscrowParams };
 
 export interface InvoiceEscrowContractServiceDependencies {
   contractId: string;
@@ -51,7 +46,7 @@ export class InvoiceEscrowContractService {
 
   constructor(
     dependenciesOrContractId: string | InvoiceEscrowContractServiceDependencies,
-    logger?: AppLogger,
+    logger?: AppLogger
   ) {
     if (typeof dependenciesOrContractId === "string") {
       if (!dependenciesOrContractId || !dependenciesOrContractId.trim()) {
@@ -106,8 +101,9 @@ export class InvoiceEscrowContractService {
     sellerAddress: string,
     amountStroops: bigint | number | string,
     dueDateTimestamp: number,
-    paymentTokenAddress: string,
+    paymentTokenAddress: string
   ): xdr.Operation {
+    const amountBigInt = typeof amountStroops === "bigint" ? amountStroops : BigInt(amountStroops);
     if (!invoiceId || typeof invoiceId !== "string" || !invoiceId.trim()) {
       throw new Error("invoiceId is required.");
     }
@@ -129,6 +125,7 @@ export class InvoiceEscrowContractService {
       new Address(sellerAddress.trim()).toScVal(),
       nativeToScVal(amountBigInt, { type: "i128" }),
       nativeToScVal(dueDateTimestamp, { type: "u64" }),
+      new Address(paymentTokenAddress).toScVal()
       new Address(paymentTokenAddress.trim()).toScVal(),
     );
   }
@@ -139,8 +136,15 @@ export class InvoiceEscrowContractService {
   public buildFundEscrowTx(
     invoiceId: string,
     investorAddress: string,
-    amountStroops: bigint | number | string,
+    amountStroops: bigint | number | string
   ): xdr.Operation {
+    const amountBigInt = typeof amountStroops === "bigint" ? amountStroops : BigInt(amountStroops);
+
+    return this.contract.call(
+      "fund_escrow",
+      nativeToScVal(invoiceId, { type: "symbol" }),
+      new Address(investorAddress).toScVal(),
+      nativeToScVal(amountBigInt, { type: "i128" })
     if (!invoiceId || typeof invoiceId !== "string" || !invoiceId.trim()) {
       throw new Error("invoiceId is required.");
     }
@@ -164,8 +168,15 @@ export class InvoiceEscrowContractService {
   public buildRecordPaymentTx(
     invoiceId: string,
     payerAddress: string,
-    amountStroops: bigint | number | string,
+    amountStroops: bigint | number | string
   ): xdr.Operation {
+    const amountBigInt = typeof amountStroops === "bigint" ? amountStroops : BigInt(amountStroops);
+
+    return this.contract.call(
+      "record_payment",
+      nativeToScVal(invoiceId, { type: "symbol" }),
+      new Address(payerAddress).toScVal(),
+      nativeToScVal(amountBigInt, { type: "i128" })
     if (!invoiceId || typeof invoiceId !== "string" || !invoiceId.trim()) {
       throw new Error("invoiceId is required.");
     }
@@ -187,6 +198,7 @@ export class InvoiceEscrowContractService {
    * Build the Soroban contract invocation operation for settling an escrow.
    */
   public buildSettleEscrowTx(invoiceId: string): xdr.Operation {
+    return this.contract.call("settle_escrow", nativeToScVal(invoiceId, { type: "symbol" }));
     if (!invoiceId || typeof invoiceId !== "string" || !invoiceId.trim()) {
       throw new Error("invoiceId is required.");
     }
@@ -201,7 +213,7 @@ export class InvoiceEscrowContractService {
    * Simulates a transaction against the Soroban RPC endpoint to verify resource limits and auth footprint.
    */
   public async simulateTransaction(
-    transaction: Transaction | FeeBumpTransaction,
+    transaction: Transaction | FeeBumpTransaction
   ): Promise<SimulateTransactionResult> {
     if (!this.rpcServer) {
       throw new Error("Soroban RPC server is not configured for simulation.");
@@ -249,7 +261,7 @@ export class InvoiceEscrowContractService {
    * Submits a transaction to the Stellar network via Soroban RPC sendTransaction.
    */
   public async submitTransaction(
-    transaction: Transaction | FeeBumpTransaction,
+    transaction: Transaction | FeeBumpTransaction
   ): Promise<SendTransactionResult> {
     if (!this.rpcServer) {
       throw new Error("Soroban RPC server is not configured for submission.");
@@ -339,6 +351,9 @@ export class InvoiceEscrowContractService {
    * Ensures that only sanitized metadata (invoiceId, sorobanContractId, sellerAddress, amountStroops)
    * is logged without leaking any secret keys, signing seeds, or auth tokens.
    */
+  public async createEscrowOnChain(input: CreateEscrowInput): Promise<CreateEscrowResult> {
+    const amountBigInt =
+      typeof input.amountStroops === "bigint" ? input.amountStroops : BigInt(input.amountStroops);
   public async createEscrowOnChain(
     input: CreateEscrowInput,
   ): Promise<CreateEscrowResult> {
@@ -349,7 +364,7 @@ export class InvoiceEscrowContractService {
       input.sellerAddress,
       amountBigInt,
       input.dueDateTimestamp,
-      input.paymentTokenAddress,
+      input.paymentTokenAddress
     );
 
     const amountStroopsStr = amountBigInt.toString();

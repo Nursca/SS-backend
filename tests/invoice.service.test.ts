@@ -86,6 +86,57 @@ describe("InvoiceService", () => {
       });
     });
 
+    it("should calculate net amount correctly", async () => {
+      mockInvoiceRepository.findOneBy.mockResolvedValue(null);
+      mockInvoiceRepository.create.mockReturnValue({
+        ...mockInvoice,
+        amount: "1000.00",
+        discountRate: "10.00",
+      });
+      mockInvoiceRepository.save.mockResolvedValue({
+        ...mockInvoice,
+        amount: "1000.00",
+        discountRate: "10.00",
+        netAmount: "900.0000",
+      });
+
+      const result = await invoiceService.createInvoice({
+        sellerId: "seller-456",
+        invoiceNumber: "INV-001",
+        customerName: "Test Customer",
+        amount: "1000.00",
+        discountRate: "10.00",
+        dueDate: new Date("2024-12-31"),
+      });
+
+      expect(result.netAmount).toBe("900.0000");
+    });
+
+    it("should calculate net amount precisely for values where floating-point arithmetic rounds wrong", async () => {
+      mockInvoiceRepository.findOneBy.mockResolvedValue(null);
+      mockInvoiceRepository.create.mockImplementation((data: Partial<Invoice>) => ({
+        ...mockInvoice,
+        ...data,
+      }));
+      mockInvoiceRepository.save.mockImplementation(async (invoice: Invoice) => invoice);
+
+      // 29.99 - 29.99 * 0.5 / 100: naive `parseFloat` arithmetic here used to
+      // produce "29.8400" instead of the correct "29.8401" because 29.99 and
+      // 0.5 aren't exactly representable as IEEE-754 doubles.
+      const result = await invoiceService.createInvoice({
+        sellerId: "seller-456",
+        invoiceNumber: "INV-002",
+        customerName: "Test Customer",
+        amount: "29.99",
+        discountRate: "0.5",
+        dueDate: new Date("2024-12-31"),
+      });
+
+      expect(mockInvoiceRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ netAmount: "29.8401" })
+      );
+      expect(result.netAmount).toBe("29.8401");
+    });
     // netAmount = amount - amount * discountRate / 100, rounded to 4 dp.
     // The 29.99 @ 0.5% row guards a real regression: naive `parseFloat`
     // arithmetic produced "29.8400" instead of "29.8401" because 29.99 and
@@ -352,7 +403,10 @@ describe("InvoiceService", () => {
       ...mockInvoice,
       dueDate: new Date(Date.now() + 48 * 60 * 60 * 1000),
       ipfsHash: "QmTestHash",
-      seller: { kycStatus: "approved", stellarAddress: "GSELLERWALLET1234567890ABCDEFGHIJKLMNOPQRSTUV" },
+      seller: {
+        kycStatus: "approved",
+        stellarAddress: "GSELLERWALLET1234567890ABCDEFGHIJKLMNOPQRSTUV",
+      },
     } as Invoice;
 
     it("should transition draft invoice to published", async () => {
@@ -372,7 +426,10 @@ describe("InvoiceService", () => {
       const soonDueInvoice = {
         ...mockInvoice,
         dueDate: new Date(Date.now() + 60 * 60 * 1000), // 1 hour in future
-        seller: { kycStatus: "approved", stellarAddress: "GSELLERWALLET1234567890ABCDEFGHIJKLMNOPQRSTUV" },
+        seller: {
+          kycStatus: "approved",
+          stellarAddress: "GSELLERWALLET1234567890ABCDEFGHIJKLMNOPQRSTUV",
+        },
       };
       mockInvoiceRepository.findOne.mockResolvedValue(soonDueInvoice);
 
@@ -392,7 +449,10 @@ describe("InvoiceService", () => {
         ...mockInvoice,
         status: InvoiceStatus.SETTLED,
         dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-        seller: { kycStatus: "approved", stellarAddress: "GSELLERWALLET1234567890ABCDEFGHIJKLMNOPQRSTUV" },
+        seller: {
+          kycStatus: "approved",
+          stellarAddress: "GSELLERWALLET1234567890ABCDEFGHIJKLMNOPQRSTUV",
+        },
       };
       mockInvoiceRepository.findOne.mockResolvedValue(settledInvoice);
 
@@ -439,7 +499,10 @@ describe("InvoiceService", () => {
       const invoiceWithPendingKYC = {
         ...publishableInvoice,
         status: InvoiceStatus.DRAFT,
-        seller: { kycStatus: "pending", stellarAddress: "GSELLERWALLET1234567890ABCDEFGHIJKLMNOPQRSTUV" },
+        seller: {
+          kycStatus: "pending",
+          stellarAddress: "GSELLERWALLET1234567890ABCDEFGHIJKLMNOPQRSTUV",
+        },
       };
       mockInvoiceRepository.findOne.mockResolvedValue(invoiceWithPendingKYC);
 
@@ -462,7 +525,7 @@ describe("InvoiceService", () => {
         invoiceService.publishInvoice({
           invoiceId: "invoice-123",
           sellerId: "seller-456",
-        }),
+        })
       ).rejects.toMatchObject({
         code: "invoice_not_publishable",
         statusCode: 400,

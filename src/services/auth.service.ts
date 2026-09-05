@@ -7,12 +7,16 @@ import { AuthChallenge } from "../models/AuthChallenge.model";
 import { User, USER_PROFILE_SELECT } from "../models/User.model";
 import type { PublicUser } from "../types/auth";
 import { HttpError } from "../utils/http-error";
+import { buildAuthFailureDetails, classifyJwtError } from "../lib/auth-failure";
+import { AppError, HttpError } from "../utils/http-error";
+import { logger } from "../observability/logger";
 import {
   buildAuthFailureDetails,
   classifyJwtError,
 } from "../lib/auth-failure";
 import type { AppLogger } from "../observability/logger";
 import { buildWalletChallenge } from "../utils/stellar-challenge";
+import { MetricsRegistry } from "../observability/metrics";
 
 interface ChallengeRecord {
   id: string;
@@ -37,6 +41,14 @@ interface CreateChallengeRecordInput {
 export interface UserRepositoryContract {
   findById(id: string): Promise<User | null>;
   findByStellarAddress(stellarAddress: string): Promise<User | null>;
+  findByEmail(email: string): Promise<User | null>;
+  findAll(options?: {
+    skip?: number;
+    take?: number;
+    cursor?: string;
+    order?: "ASC" | "DESC";
+  }): Promise<User[]>;
+  count(options?: { cursor?: string }): Promise<number>;
   save(user: Partial<User>): Promise<User>;
 }
 
@@ -44,9 +56,11 @@ export interface ChallengeRepositoryContract {
   create(input: CreateChallengeRecordInput): Promise<ChallengeRecord>;
   findByAddressAndNonceHash(
     stellarAddress: string,
-    nonceHash: string,
+    nonceHash: string
   ): Promise<ChallengeRecord | null>;
   consume(id: string, consumedAt: Date): Promise<boolean>;
+  deleteExpired(before: Date): Promise<number>;
+  countByStatus(status: "active" | "consumed" | "expired"): Promise<number>;
 }
 
 interface AuthTokenPayload extends JwtPayload {
@@ -59,6 +73,7 @@ export interface AuthServiceDependencies {
   challengeRepository: ChallengeRepositoryContract;
   config: Pick<AppConfig, "jwt" | "auth" | "stellar"> & { serverKeypair?: Keypair };
   logger?: AppLogger;
+  metrics?: MetricsRegistry;
 }
 
 export interface ChallengeResponse {
@@ -90,6 +105,7 @@ export class AuthService {
   private readonly config: Pick<AppConfig, "jwt" | "auth" | "stellar">;
   private readonly logger?: AppLogger;
   private readonly serverKeypair?: Keypair;
+  private readonly metrics?: MetricsRegistry;
 
   constructor(dependencies: AuthServiceDependencies) {
     this.userRepository = dependencies.userRepository;
@@ -97,6 +113,14 @@ export class AuthService {
     this.config = dependencies.config;
     this.logger = dependencies.logger;
     this.serverKeypair = dependencies.config.serverKeypair;
+    this.metrics = dependencies.metrics;
+  }
+
+  private recordChallengeMetric(
+    status: "created" | "verified" | "expired" | "failed" | "reused",
+    wallet: string
+  ): void {
+    this.metrics?.increment("auth_challenge_total", { status, wallet: wallet.slice(0, 8) + "..." });
   }
 
   async createChallenge(publicKey: string): Promise<ChallengeResponse> {
@@ -112,7 +136,7 @@ export class AuthService {
         ({ nonce } = buildWalletChallenge(
           sanitizedKey,
           this.config.stellar.networkPassphrase,
-          this.serverKeypair,
+          this.serverKeypair
         ));
       } else {
         nonce = crypto.randomBytes(32).toString("hex");
@@ -136,6 +160,7 @@ export class AuthService {
           issuedAt,
           expiresAt,
         });
+        this.recordChallengeMetric("created", sanitizedKey);
       } catch (error) {
         this.logger?.error("Failed to persist challenge", { error, stellarAddress: sanitizedKey });
         throw new HttpError(500, "Failed to create challenge.");
@@ -158,9 +183,7 @@ export class AuthService {
     }
   }
 
-  async verifyChallenge(
-    input: VerifyChallengeInput,
-  ): Promise<VerifyChallengeResponse> {
+  async verifyChallenge(input: VerifyChallengeInput): Promise<VerifyChallengeResponse> {
     try {
       const sanitizedKey = input.publicKey.trim();
       const sanitizedNonce = input.nonce.trim();
@@ -179,7 +202,7 @@ export class AuthService {
       try {
         challenge = await this.challengeRepository.findByAddressAndNonceHash(
           sanitizedKey,
-          hashNonce(sanitizedNonce),
+          hashNonce(sanitizedNonce)
         );
       } catch (error) {
         this.logger?.error("Failed to fetch challenge", { error, stellarAddress: sanitizedKey });
@@ -199,6 +222,7 @@ export class AuthService {
       }
 
       if (challenge.expiresAt.getTime() <= Date.now()) {
+        this.recordChallengeMetric("expired", sanitizedKey);
         throw new HttpError(401, "Challenge expired.");
       }
 
@@ -224,6 +248,7 @@ export class AuthService {
 
       if (!isValid) {
         this.logger?.warn("Invalid challenge signature", { stellarAddress: sanitizedKey });
+        this.recordChallengeMetric("failed", sanitizedKey);
         throw new HttpError(401, "Invalid signature.");
       }
 
@@ -239,6 +264,8 @@ export class AuthService {
         throw new HttpError(401, "Challenge already used.");
       }
 
+      this.recordChallengeMetric("verified", sanitizedKey);
+
       let user: User;
       try {
         user = await this.upsertUser(sanitizedKey);
@@ -253,7 +280,9 @@ export class AuthService {
       const decoded = jwt.decode(token) as { iat?: number; exp?: number } | null;
       this.logger?.info("jwt.issued", {
         wallet: publicUser.stellarAddress,
-        issued_at: decoded?.iat ? new Date(decoded.iat * 1000).toISOString() : new Date().toISOString(),
+        issued_at: decoded?.iat
+          ? new Date(decoded.iat * 1000).toISOString()
+          : new Date().toISOString(),
         expires_at: decoded?.exp ? new Date(decoded.exp * 1000).toISOString() : null,
         ip_address: input.ipAddress ?? null,
       });
@@ -273,12 +302,46 @@ export class AuthService {
     }
   }
 
+  async cleanupExpiredChallenges(maxAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
+    const before = new Date(Date.now() - maxAgeMs);
+    try {
+      const deleted = await this.challengeRepository.deleteExpired(before);
+      this.logger?.info("Cleaned up expired challenges", { count: deleted });
+      return deleted;
+    } catch (error) {
+      this.logger?.error("Failed to cleanup expired challenges", { error });
+      throw new HttpError(500, "Failed to cleanup expired challenges.");
+    }
+  }
+
+  async getChallengeMetrics(): Promise<{
+    active: number;
+    consumed: number;
+    expired: number;
+  }> {
+    try {
+      const [active, consumed, expired] = await Promise.all([
+        this.challengeRepository.countByStatus("active"),
+        this.challengeRepository.countByStatus("consumed"),
+        this.challengeRepository.countByStatus("expired"),
+      ]);
+      return { active, consumed, expired };
+    } catch (error) {
+      this.logger?.error("Failed to get challenge metrics", { error });
+      throw new HttpError(500, "Failed to get challenge metrics.");
+    }
+  }
+
   async getCurrentUser(token: string): Promise<PublicUser> {
     let payload: AuthTokenPayload;
 
     const sanitizedToken = token?.trim();
     if (!sanitizedToken) {
-      throw new HttpError(401, "Invalid or expired token.", buildAuthFailureDetails(token, "missing_token"));
+      throw new HttpError(
+        401,
+        "Invalid or expired token.",
+        buildAuthFailureDetails(token, "missing_token")
+      );
     }
 
     try {
@@ -287,7 +350,7 @@ export class AuthService {
       throw new HttpError(
         401,
         "Invalid or expired token.",
-        buildAuthFailureDetails(sanitizedToken, classifyJwtError(error)),
+        buildAuthFailureDetails(sanitizedToken, classifyJwtError(error))
       );
     }
 
@@ -295,7 +358,7 @@ export class AuthService {
       throw new HttpError(
         401,
         "Invalid token payload.",
-        buildAuthFailureDetails(sanitizedToken, "invalid_token"),
+        buildAuthFailureDetails(sanitizedToken, "invalid_token")
       );
     }
 
@@ -321,8 +384,8 @@ export class AuthService {
   }
 
   private async upsertUser(publicKey: string): Promise<User> {
+    const sanitized = publicKey.trim();
     try {
-      const sanitized = publicKey.trim();
       const existingUser = await this.userRepository.findByStellarAddress(sanitized);
 
       if (existingUser) {
@@ -333,6 +396,10 @@ export class AuthService {
         stellarAddress: sanitized,
       });
     } catch (error) {
+      if (error instanceof Error && error.message.includes("duplicate key")) {
+        const existing = await this.userRepository.findByStellarAddress(sanitized);
+        if (existing) return existing;
+      }
       this.logger?.error("upsertUser failed", { error, publicKey });
       throw error;
     }
@@ -352,13 +419,13 @@ export class AuthService {
       {
         ...signOptions,
         subject: user.stellarAddress,
-      },
+      }
     );
   }
 }
 
 class TypeOrmUserRepository implements UserRepositoryContract {
-  constructor(private readonly repository: Repository<User>) { }
+  constructor(private readonly repository: Repository<User>) {}
 
   findById(id: string): Promise<User | null> {
     return this.repository.findOne({
@@ -374,6 +441,42 @@ class TypeOrmUserRepository implements UserRepositoryContract {
     });
   }
 
+  findByEmail(email: string): Promise<User | null> {
+    return this.repository.findOne({
+      where: { email },
+    });
+  }
+
+  findAll(options?: {
+    skip?: number;
+    take?: number;
+    cursor?: string;
+    order?: "ASC" | "DESC";
+  }): Promise<User[]> {
+    const qb = this.repository.createQueryBuilder("user");
+    qb.where("user.deletedAt IS NULL");
+
+    if (options?.cursor) {
+      const direction = options.order === "ASC" ? ">" : "<";
+      qb.andWhere(`user.id ${direction} :cursor`, { cursor: options.cursor });
+    }
+
+    qb.orderBy("user.id", options?.order ?? "DESC");
+    if (options?.take) qb.take(options.take);
+    if (options?.skip) qb.skip(options.skip);
+
+    return qb.getMany();
+  }
+
+  async count(options?: { cursor?: string }): Promise<number> {
+    const qb = this.repository.createQueryBuilder("user");
+    qb.where("user.deletedAt IS NULL");
+    if (options?.cursor) {
+      qb.andWhere("user.id < :cursor", { cursor: options.cursor });
+    }
+    return qb.getCount();
+  }
+
   async save(user: Partial<User>): Promise<User> {
     const entity = this.repository.create(user);
     return this.repository.save(entity);
@@ -381,7 +484,7 @@ class TypeOrmUserRepository implements UserRepositoryContract {
 }
 
 class TypeOrmChallengeRepository implements ChallengeRepositoryContract {
-  constructor(private readonly repository: Repository<AuthChallenge>) { }
+  constructor(private readonly repository: Repository<AuthChallenge>) {}
 
   async create(input: CreateChallengeRecordInput): Promise<ChallengeRecord> {
     const entity = this.repository.create({
@@ -399,7 +502,7 @@ class TypeOrmChallengeRepository implements ChallengeRepositoryContract {
 
   findByAddressAndNonceHash(
     stellarAddress: string,
-    nonceHash: string,
+    nonceHash: string
   ): Promise<ChallengeRecord | null> {
     return this.repository.findOne({
       where: {
@@ -417,10 +520,37 @@ class TypeOrmChallengeRepository implements ChallengeRepositoryContract {
       },
       {
         consumedAt,
-      },
+      }
     );
 
     return (result.affected ?? 0) > 0;
+  }
+
+  async deleteExpired(before: Date): Promise<number> {
+    const result = await this.repository
+      .createQueryBuilder()
+      .delete()
+      .where("expiresAt < :before", { before })
+      .orWhere("consumedAt IS NOT NULL AND consumedAt < :before", { before })
+      .execute();
+    return result.affected ?? 0;
+  }
+
+  async countByStatus(status: "active" | "consumed" | "expired"): Promise<number> {
+    const qb = this.repository.createQueryBuilder("challenge");
+    const now = new Date();
+    switch (status) {
+      case "active":
+        qb.where("challenge.consumedAt IS NULL AND challenge.expiresAt > :now", { now });
+        break;
+      case "consumed":
+        qb.where("challenge.consumedAt IS NOT NULL");
+        break;
+      case "expired":
+        qb.where("challenge.consumedAt IS NULL AND challenge.expiresAt <= :now", { now });
+        break;
+    }
+    return qb.getCount();
   }
 }
 
@@ -428,14 +558,14 @@ export function createAuthService(
   dataSource: DataSource,
   config: Pick<AppConfig, "jwt" | "auth" | "stellar">,
   logger?: AppLogger,
+  metrics?: MetricsRegistry
 ): AuthService {
   return new AuthService({
     userRepository: new TypeOrmUserRepository(dataSource.getRepository(User)),
-    challengeRepository: new TypeOrmChallengeRepository(
-      dataSource.getRepository(AuthChallenge),
-    ),
+    challengeRepository: new TypeOrmChallengeRepository(dataSource.getRepository(AuthChallenge)),
     config,
     logger,
+    metrics,
   });
 }
 
@@ -475,10 +605,7 @@ function decodeSignature(signature: string): Buffer {
     ? trimmedSignature.slice(2)
     : trimmedSignature;
 
-  if (
-    /^[a-fA-F0-9]+$/.test(normalizedHexSignature) &&
-    normalizedHexSignature.length % 2 === 0
-  ) {
+  if (/^[a-fA-F0-9]+$/.test(normalizedHexSignature) && normalizedHexSignature.length % 2 === 0) {
     return Buffer.from(normalizedHexSignature, "hex");
   }
 
@@ -486,9 +613,7 @@ function decodeSignature(signature: string): Buffer {
     throw new HttpError(400, "Signature must be base64, base64url, or hex encoded.");
   }
 
-  const normalizedBase64Signature = trimmedSignature
-    .replace(/-/g, "+")
-    .replace(/_/g, "/");
+  const normalizedBase64Signature = trimmedSignature.replace(/-/g, "+").replace(/_/g, "/");
   const paddingLength = normalizedBase64Signature.length % 4;
   const paddedBase64Signature =
     paddingLength === 0
