@@ -21,12 +21,7 @@ import type {
 } from "../../types/soroban.types";
 
 export type CreateEscrowInput = CreateEscrowParams;
-export type {
-  CreateEscrowResult,
-  FundEscrowParams,
-  RecordPaymentParams,
-  SettleEscrowParams,
-};
+export type { CreateEscrowResult, FundEscrowParams, RecordPaymentParams, SettleEscrowParams };
 
 /**
  * Maximum value (inclusive) accepted for `amountStroops`. Soroban `i128`
@@ -150,7 +145,7 @@ export class InvoiceEscrowContractService {
 
   constructor(
     dependenciesOrContractId: string | InvoiceEscrowContractServiceDependencies,
-    logger?: AppLogger,
+    logger?: AppLogger
   ) {
     if (typeof dependenciesOrContractId === "string") {
       this.contractId = sanitizeString(dependenciesOrContractId, "contractId");
@@ -297,11 +292,25 @@ export class InvoiceEscrowContractService {
     sellerAddress: string,
     amountStroops: bigint | number | string,
     dueDateTimestamp: number,
-    paymentTokenAddress: string,
+    paymentTokenAddress: string
   ): xdr.Operation {
     const safeInvoiceId = sanitizeString(invoiceId, "invoiceId");
     const safeSeller = sanitizeString(sellerAddress, "sellerAddress");
     const safeToken = sanitizeString(paymentTokenAddress, "paymentTokenAddress");
+    const amountBigInt = typeof amountStroops === "bigint" ? amountStroops : BigInt(amountStroops);
+    if (!invoiceId || typeof invoiceId !== "string" || !invoiceId.trim()) {
+      throw new Error("invoiceId is required.");
+    }
+    if (!sellerAddress || typeof sellerAddress !== "string" || !sellerAddress.trim()) {
+      throw new Error("sellerAddress is required.");
+    }
+    if (!Number.isFinite(dueDateTimestamp) || dueDateTimestamp <= 0) {
+      throw new Error("dueDateTimestamp must be a positive number.");
+    }
+    if (!paymentTokenAddress || typeof paymentTokenAddress !== "string" || !paymentTokenAddress.trim()) {
+      throw new Error("paymentTokenAddress is required.");
+    }
+
     const amountBigInt = this.parseStroopAmount(amountStroops, "amountStroops");
     this.parseDueDate(dueDateTimestamp);
 
@@ -312,6 +321,8 @@ export class InvoiceEscrowContractService {
       nativeToScVal(amountBigInt, { type: "i128" }),
       nativeToScVal(dueDateTimestamp, { type: "u64" }),
       new Address(safeToken).toScVal(),
+      new Address(paymentTokenAddress).toScVal()
+      new Address(paymentTokenAddress.trim()).toScVal(),
     );
   }
 
@@ -321,10 +332,24 @@ export class InvoiceEscrowContractService {
   public buildFundEscrowTx(
     invoiceId: string,
     investorAddress: string,
-    amountStroops: bigint | number | string,
+    amountStroops: bigint | number | string
   ): xdr.Operation {
     const safeInvoiceId = sanitizeString(invoiceId, "invoiceId");
     const safeInvestor = sanitizeString(investorAddress, "investorAddress");
+    const amountBigInt = typeof amountStroops === "bigint" ? amountStroops : BigInt(amountStroops);
+
+    return this.contract.call(
+      "fund_escrow",
+      nativeToScVal(invoiceId, { type: "symbol" }),
+      new Address(investorAddress).toScVal(),
+      nativeToScVal(amountBigInt, { type: "i128" })
+    if (!invoiceId || typeof invoiceId !== "string" || !invoiceId.trim()) {
+      throw new Error("invoiceId is required.");
+    }
+    if (!investorAddress || typeof investorAddress !== "string" || !investorAddress.trim()) {
+      throw new Error("investorAddress is required.");
+    }
+
     const amountBigInt = this.parseStroopAmount(amountStroops, "amountStroops");
 
     return this.contract.call(
@@ -341,10 +366,24 @@ export class InvoiceEscrowContractService {
   public buildRecordPaymentTx(
     invoiceId: string,
     payerAddress: string,
-    amountStroops: bigint | number | string,
+    amountStroops: bigint | number | string
   ): xdr.Operation {
     const safeInvoiceId = sanitizeString(invoiceId, "invoiceId");
     const safePayer = sanitizeString(payerAddress, "payerAddress");
+    const amountBigInt = typeof amountStroops === "bigint" ? amountStroops : BigInt(amountStroops);
+
+    return this.contract.call(
+      "record_payment",
+      nativeToScVal(invoiceId, { type: "symbol" }),
+      new Address(payerAddress).toScVal(),
+      nativeToScVal(amountBigInt, { type: "i128" })
+    if (!invoiceId || typeof invoiceId !== "string" || !invoiceId.trim()) {
+      throw new Error("invoiceId is required.");
+    }
+    if (!payerAddress || typeof payerAddress !== "string" || !payerAddress.trim()) {
+      throw new Error("payerAddress is required.");
+    }
+
     const amountBigInt = this.parseStroopAmount(amountStroops, "amountStroops");
 
     return this.contract.call(
@@ -360,6 +399,10 @@ export class InvoiceEscrowContractService {
    */
   public buildSettleEscrowTx(invoiceId: string): xdr.Operation {
     const safeInvoiceId = sanitizeString(invoiceId, "invoiceId");
+    return this.contract.call("settle_escrow", nativeToScVal(invoiceId, { type: "symbol" }));
+    if (!invoiceId || typeof invoiceId !== "string" || !invoiceId.trim()) {
+      throw new Error("invoiceId is required.");
+    }
 
     return this.contract.call(
       "settle_escrow",
@@ -374,7 +417,7 @@ export class InvoiceEscrowContractService {
    * {@link ServiceError}.
    */
   public async simulateTransaction(
-    transaction: Transaction | FeeBumpTransaction,
+    transaction: Transaction | FeeBumpTransaction
   ): Promise<SimulateTransactionResult> {
     if (!this.rpcServer) {
       throw new ServiceError(
@@ -418,7 +461,7 @@ export class InvoiceEscrowContractService {
    * backoff + jitter before being surfaced as a {@link ServiceError}.
    */
   public async submitTransaction(
-    transaction: Transaction | FeeBumpTransaction,
+    transaction: Transaction | FeeBumpTransaction
   ): Promise<SendTransactionResult> {
     if (!this.rpcServer) {
       throw new ServiceError(
@@ -598,6 +641,9 @@ export class InvoiceEscrowContractService {
    * `sellerAddress`, `amountStroops`) is logged — no secret keys, signing
    * seeds, or auth tokens are ever written to logs.
    */
+  public async createEscrowOnChain(input: CreateEscrowInput): Promise<CreateEscrowResult> {
+    const amountBigInt =
+      typeof input.amountStroops === "bigint" ? input.amountStroops : BigInt(input.amountStroops);
   public async createEscrowOnChain(
     input: CreateEscrowInput,
   ): Promise<CreateEscrowResult> {
@@ -609,7 +655,7 @@ export class InvoiceEscrowContractService {
       input.sellerAddress,
       amountBigInt,
       input.dueDateTimestamp,
-      input.paymentTokenAddress,
+      input.paymentTokenAddress
     );
 
     const amountStroopsStr = amountBigInt.toString();

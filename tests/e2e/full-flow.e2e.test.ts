@@ -211,6 +211,47 @@ describe("E2E: Complete Invoice Financing Flow", () => {
       },
     };
 
+    // Initialize test database (SQLite in-memory)
+    patchEntityMetadataForSQLite();
+
+    dataSource = new DataSource({
+      type: "sqlite",
+      database: ":memory:",
+      synchronize: true,
+      logging: false,
+      entities: [
+        User,
+        Invoice,
+        Investment,
+        AuthChallenge,
+        Transaction,
+        KYCVerification,
+        Notification,
+      ],
+    });
+
+    await dataSource.initialize();
+
+    // Create services with mocked IPFS
+    const authService = createAuthService(dataSource, config, logger);
+    const invoiceService = createInvoiceService(dataSource, mockIPFSService);
+    const investmentService = createInvestmentService(dataSource);
+    const settlementService = createSettlementService(dataSource);
+    const marketplaceService = createMarketplaceService(dataSource);
+    const notificationService = createNotificationService(dataSource);
+
+    // Create the full app
+    app = createApp({
+      authService,
+      notificationService,
+      invoiceService,
+      investmentService,
+      settlementService,
+      marketplaceService,
+      config,
+      logger,
+      metricsEnabled: false,
+    });
     // Initialize test database (SQLite in-memory). Wrap the whole bring-up so a
     // failure in schema sync or service wiring surfaces with a clear cause
     // instead of every downstream test throwing an opaque "app is undefined".
@@ -270,6 +311,53 @@ describe("E2E: Complete Invoice Financing Flow", () => {
       sellerToken = token;
       sellerId = userId;
 
+      expect(challengeRes.body.challenge).toBeDefined();
+      expect(challengeRes.body.challenge.publicKey).toBe(sellerKeypair.publicKey());
+      expect(challengeRes.body.challenge.nonce).toBeDefined();
+      expect(challengeRes.body.challenge.message).toBeDefined();
+
+      const { nonce, message } = challengeRes.body.challenge;
+
+      // Sign the challenge message
+      const signature = sellerKeypair.sign(Buffer.from(message, "utf8")).toString("hex");
+
+      // Verify challenge and get token
+      const verifyRes = await request(app)
+        .post("/api/v1/auth/verify")
+        .send({
+          publicKey: sellerKeypair.publicKey(),
+          nonce,
+          signature,
+        })
+        .expect(200);
+
+      expect(verifyRes.body.token).toBeDefined();
+      expect(verifyRes.body.tokenType).toBe("Bearer");
+      expect(verifyRes.body.user).toBeDefined();
+      expect(verifyRes.body.user.stellarAddress).toBe(sellerKeypair.publicKey());
+
+      sellerToken = verifyRes.body.token;
+      sellerId = verifyRes.body.user.id;
+    });
+
+    it("should authenticate investor via Stellar challenge-response", async () => {
+      const challengeRes = await request(app)
+        .post("/api/v1/auth/challenge")
+        .send({ publicKey: investorKeypair.publicKey() })
+        .expect(201);
+
+      const { nonce, message } = challengeRes.body.challenge;
+
+      const signature = investorKeypair.sign(Buffer.from(message, "utf8")).toString("hex");
+
+      const verifyRes = await request(app)
+        .post("/api/v1/auth/verify")
+        .send({
+          publicKey: investorKeypair.publicKey(),
+          nonce,
+          signature,
+        })
+        .expect(200);
       expect(sellerToken).toEqual(expect.any(String));
       expect(sellerId).toEqual(expect.any(String));
     });
@@ -375,9 +463,7 @@ describe("E2E: Complete Invoice Financing Flow", () => {
       expect(invoice).toBeDefined();
       expect(invoice?.status).toBe(InvoiceStatus.PUBLISHED);
       expect(invoice?.sellerId).toBe(sellerId);
-      expect(invoice?.ipfsHash).toBe(
-        "QmMockHash1234567890123456789012345678901234567890"
-      );
+      expect(invoice?.ipfsHash).toBe("QmMockHash1234567890123456789012345678901234567890");
     });
   });
 
@@ -395,9 +481,7 @@ describe("E2E: Complete Invoice Financing Flow", () => {
       expect(Array.isArray(marketplaceRes.body.data)).toBe(true);
       expect(marketplaceRes.body.data.length).toBeGreaterThan(0);
 
-      const listedInvoice = marketplaceRes.body.data.find(
-        (inv: any) => inv.id === invoiceId
-      );
+      const listedInvoice = marketplaceRes.body.data.find((inv: any) => inv.id === invoiceId);
       expect(listedInvoice).toBeDefined();
       expect(listedInvoice.invoiceNumber).toBe("INV-E2E-001");
       expect(toNum(listedInvoice.amount)).toBeCloseTo(10000, 2);

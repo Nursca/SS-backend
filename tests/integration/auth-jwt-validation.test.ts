@@ -35,11 +35,47 @@ class InMemoryUserRepository implements UserRepositoryContract {
   }
 
   async findByStellarAddress(stellarAddress: string) {
-    return (
-      [...this.users.values()].find(
-        (user) => user.stellarAddress === stellarAddress,
-      ) ?? null
+    return [...this.users.values()].find((user) => user.stellarAddress === stellarAddress) ?? null;
+  }
+
+  async findByEmail(email: string) {
+    return [...this.users.values()].find((u) => u.email === email) ?? null;
+  }
+
+  async findAll(options?: {
+    skip?: number;
+    take?: number;
+    cursor?: string;
+    order?: "ASC" | "DESC";
+  }) {
+    let results = [...this.users.values()].filter((u) => !u.deletedAt);
+    results.sort((a, b) =>
+      options?.order === "ASC" ? a.id.localeCompare(b.id) : b.id.localeCompare(a.id)
     );
+    if (options?.cursor) {
+      const cursorIndex = results.findIndex((u) => u.id === options.cursor);
+      if (cursorIndex >= 0) {
+        results = results.slice(cursorIndex + 1);
+      }
+    }
+    if (options?.skip) {
+      results = results.slice(options.skip);
+    }
+    if (options?.take) {
+      results = results.slice(0, options.take);
+    }
+    return results;
+  }
+
+  async count(options?: { cursor?: string }): Promise<number> {
+    let results = [...this.users.values()].filter((u) => !u.deletedAt);
+    if (options?.cursor) {
+      const cursorIndex = results.findIndex((u) => u.id === options.cursor);
+      if (cursorIndex >= 0) {
+        results = results.slice(0, cursorIndex);
+      }
+    }
+    return results.length;
   }
 
   async save(user: Partial<InMemoryUser>) {
@@ -89,8 +125,7 @@ class InMemoryChallengeRepository implements ChallengeRepositoryContract {
     return (
       [...this.challenges.values()].find(
         (challenge) =>
-          challenge.stellarAddress === stellarAddress &&
-          challenge.nonceHash === nonceHash,
+          challenge.stellarAddress === stellarAddress && challenge.nonceHash === nonceHash
       ) ?? null
     );
   }
@@ -104,6 +139,28 @@ class InMemoryChallengeRepository implements ChallengeRepositoryContract {
 
     challenge.consumedAt = consumedAt;
     return true;
+  }
+
+  async deleteExpired(before: Date): Promise<number> {
+    let count = 0;
+    for (const [id, challenge] of this.challenges.entries()) {
+      if (challenge.expiresAt < before || (challenge.consumedAt && challenge.consumedAt < before)) {
+        this.challenges.delete(id);
+        count++;
+      }
+    }
+    return count;
+  }
+
+  async countByStatus(status: "active" | "consumed" | "expired"): Promise<number> {
+    const now = new Date();
+    let count = 0;
+    for (const challenge of this.challenges.values()) {
+      if (status === "active" && !challenge.consumedAt && challenge.expiresAt > now) count++;
+      if (status === "consumed" && challenge.consumedAt) count++;
+      if (status === "expired" && !challenge.consumedAt && challenge.expiresAt <= now) count++;
+    }
+    return count;
   }
 }
 
@@ -140,6 +197,15 @@ describe("JWT authentication validation", () => {
     jest.clearAllMocks();
   });
 
+    const forgedToken = jwt.sign(
+      {
+        sub: "GFORGED_STELLAR_ADDRESS",
+        stellarAddress: "GFORGED_STELLAR_ADDRESS",
+        userId: crypto.randomUUID(),
+      },
+      "invalid-secret-key",
+      { expiresIn: "15m" }
+    );
   it("rejects GET /api/v1/auth/me when the JWT is signed with an invalid secret key", async () => {
     try {
       const app = createTestApp();
@@ -180,7 +246,7 @@ describe("JWT authentication validation", () => {
         userId: crypto.randomUUID(),
       },
       VALID_JWT_SECRET,
-      { expiresIn: "-5m" },
+      { expiresIn: "-5m" }
     );
 
     const response = await request(app)
