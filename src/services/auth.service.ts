@@ -147,7 +147,7 @@ export class AuthService {
   async createChallenge(publicKey: string): Promise<ChallengeResponse> {
     try {
       const sanitizedKey = this.assertValidPublicKey(publicKey);
-      const issuedAt = new Date();
+      const issuedAt = new Date(this.now());
       const expiresAt = new Date(issuedAt.getTime() + this.config.auth.challengeTtlMs);
 
       let nonce: string;
